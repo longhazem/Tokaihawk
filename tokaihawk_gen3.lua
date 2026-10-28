@@ -49,6 +49,18 @@ Library.Options = {}
 Library._airflow = Airflow -- addons/ThemeManager.lua & addons/SaveManager.lua reach the raw module through this
 Library._configFolder = nil -- set by addons/SaveManager.lua:SetFolder before CreateWindow is called
 
+-- Linoria exposes these directly on Library for custom drawing (BRM5.lua reads
+-- Library.Font straight into Font.fromEnum(...) at its own Fonts table, line ~52,
+-- plus a few raw TextColor3/color reads elsewhere) — mirror Linoria's defaults
+-- (LinoriaSrc.lua line 40, and the Clean theme BRM5.lua registers below) so those
+-- reads never hit nil.
+Library.Font = Enum.Font.Code
+Library.FontColor = Color3.fromRGB(0xE8, 0xE8, 0xE8)
+Library.MainColor = Color3.fromRGB(0x1D, 0x1D, 0x1D)
+Library.BackgroundColor = Color3.fromRGB(0x14, 0x14, 0x14)
+Library.AccentColor = Color3.fromRGB(0xBE, 0xBE, 0xBE)
+Library.OutlineColor = Color3.fromRGB(0x38, 0x38, 0x38)
+
 -- Linoria exposes these on getgenv() too — BRM5.lua reads them that way.
 local Toggles, Options = getgenv().Toggles, getgenv().Options
 if type(Toggles) ~= 'table' then Toggles = {}; getgenv().Toggles = Toggles end
