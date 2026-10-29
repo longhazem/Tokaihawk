@@ -869,6 +869,10 @@ addToggle(TriggerGroup, 'trigger_magnetic', 'Magnetic Trigger', TriggerBotSettin
 addSlider(TriggerGroup, 'trigger_distance', 'Max Distance', TriggerBotSettings, 'MaxDistance', 50, 5000, 0, ' studs')
 
 -- Keep precise wheel adjustment without changing the library's slider implementation.
+-- .Container is a LinoriaLib-internal Frame reference gen3's groupboxes don't
+-- expose (Airflow builds its own Instance tree) — pcall-guarded so a missing
+-- Container just skips this nicety instead of aborting everything after it.
+pcall(function()
 for _, id in ipairs({ 'trigger_reaction', 'trigger_shoot' }) do
     local slider = Options[id]
     local text = id == 'trigger_reaction' and 'Reaction Time' or 'Shoot Time'
@@ -887,9 +891,16 @@ for _, id in ipairs({ 'trigger_reaction', 'trigger_shoot' }) do
         end))
     end
 end
+end)
 
 -- Each primary tab owns a horizontal subnavigation row and its control pages.
-local function addSubtabs(name, pages)
+-- group.Container is a LinoriaLib-internal Frame reference gen3's groupboxes
+-- don't expose (Airflow builds its own Instance tree), so this whole nav-bar
+-- builder is wrapped in pcall below: on gen3 it safely no-ops (all the real
+-- groupboxes/controls stay visible directly on the tab, just without the
+-- subtab-style grouping/switcher bar) instead of aborting every tab built
+-- after it.
+local function addSubtabsImpl(name, pages)
     local function groupFrame(group)
         return group.Container.Parent.Parent
     end
@@ -965,6 +976,10 @@ local function addSubtabs(name, pages)
         end))
     end
     selectPage(pages[1])
+end
+
+local function addSubtabs(name, pages)
+    pcall(addSubtabsImpl, name, pages)
 end
 
 local RageGroup = Tabs.Ragebot:AddLeftGroupbox('Ragebot')
@@ -4898,10 +4913,16 @@ do
 local WMLighting = game:GetService("Lighting")
 local VisualsPage = legacyPage(Tabs.Mods, modPages, 'World Mods')
 -- Track the Linoria rows belonging to each conditional control.
+-- group.Container is a LinoriaLib-internal Frame reference gen3's groupboxes
+-- don't expose, so this row-diffing enhancement only wires up when it's
+-- present; without it, World Mods sections still build and work fully, just
+-- without the preset-driven per-control show/hide (wm_setVisible below
+-- already no-ops safely when control.SetVisible was never set).
 local addWorldSection = VisualsPage.AddSection
 VisualsPage.AddSection = function(self, info)
     local section = addWorldSection(self, info)
     local group = self.Groups[#self.Groups]
+    if not group.Container then return section end
     for _, method in ipairs({ 'AddSlider', 'AddDropdown' }) do
         local addControl = section[method]
         section[method] = function(_, data)
