@@ -97,11 +97,30 @@ function Fonts.Apply(instance)
         instance.FontFace = Fonts.Face
     end
 end
+-- Airflow draws its own elements (toggles, sliders, tabs, labels — the whole
+-- window) from Airflow.Fonts.Regular/Medium/Bold, re-applied on every render/
+-- theme pass — it does NOT read each TextLabel's own .FontFace the way
+-- Linoria's renderer does, so patching instance.FontFace by hand (Fonts.Apply,
+-- the DescendantAdded hook below, the Library.Create wrap) only ever reaches
+-- BRM5.lua's own hand-built Instances (watermark, crosshair preview panel) —
+-- never gen3's actual UI. Push the resolved face into Airflow's real font
+-- slots too so the whole window actually changes.
+local function applyToAirflow(face)
+    local airflow = Library._airflow
+    if airflow and airflow.Fonts then
+        pcall(function()
+            airflow.Fonts.Regular = face
+            airflow.Fonts.Medium = face
+            airflow.Fonts.Bold = face
+        end)
+    end
+end
 function Fonts.SetUI(name)
     local face = Fonts.Resolve(name)
     if Library.Unloaded then return end
     Fonts.UIName = name; Fonts.Face = face; Fonts.Version += 1
     Library.Font = Fonts.Builtins[name] or Enum.Font.Code
+    applyToAirflow(face)
     for _, instance in ipairs(Fonts.Root:GetDescendants()) do Fonts.Apply(instance) end
 end
 local createWithDefaultFont = Library.Create
@@ -110,6 +129,11 @@ Library.Create = function(self, class, properties)
     Fonts.Apply(instance)
     return instance
 end
+
+-- Seed Airflow's font slots with the default ('Code') face before the window
+-- (and every control in it) gets built, so the very first paint is already
+-- on the right font instead of waiting for a dropdown change.
+applyToAirflow(Fonts.Face)
 
 local Window = Library:CreateWindow({
     Title = 'Tokaihub | BRM5',
@@ -800,7 +824,11 @@ local function addTargets(group, id, settings)
     end)
 end
 
-local SilentGroup = Tabs.Main:AddLeftGroupbox('Silent Aim')
+-- Real Airflow sub tabs for Main, created upfront so Silent Aim and
+-- Triggerbot land on separate pages instead of one long scroll.
+local MainSilentSubTab = Tabs.Main:AddSubTab('Silent Aim')
+local MainTriggerSubTab = Tabs.Main:AddSubTab('Triggerbot')
+local SilentGroup = MainSilentSubTab:AddLeftGroupbox('Silent Aim')
 local EnabledControl = addToggle(SilentGroup, 'silent_enabled', 'Enabled', Silent, 'Enabled')
 EnabledControl:AddKeyPicker('silent_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -844,16 +872,16 @@ addSlider(SilentGroup, 'silent_distance', 'Max Distance', Silent, 'MaxDistance',
 addToggle(SilentGroup, 'silent_fov_enabled', 'FOV Check', Silent, 'FOVEnabled')
 addToggle(SilentGroup, 'silent_sticky', 'Sticky Aim', Silent, 'StickyAim')
 
-local PredictionGroup = Tabs.Main:AddRightGroupbox('Prediction')
+local PredictionGroup = MainSilentSubTab:AddRightGroupbox('Prediction')
 addToggle(PredictionGroup, 'silent_auto_prediction', 'Auto Prediction', Silent, 'AutoPrediction')
 addToggle(PredictionGroup, 'silent_bullet_drop_compensation', 'Bullet Drop Compensation', Silent, 'BulletDropCompensation')
 
-local ChecksGroup = Tabs.Main:AddRightGroupbox('Checks')
+local ChecksGroup = MainSilentSubTab:AddRightGroupbox('Checks')
 addToggle(ChecksGroup, 'silent_teamcheck', 'Team Check', Silent, 'TeamCheck')
 addToggle(ChecksGroup, 'silent_visiblecheck', 'Wallcheck', Silent, 'VisibleCheck')
 addToggle(ChecksGroup, 'silent_hitscan', 'Hitscan', Silent, 'Hitscan')
 
-local TriggerGroup = Tabs.Main:AddLeftGroupbox('Triggerbot')
+local TriggerGroup = MainTriggerSubTab:AddLeftGroupbox('Triggerbot')
 local TriggerControl = addToggle(TriggerGroup, 'trigger_enabled', 'Enabled', TriggerBotSettings, 'Enabled')
 TriggerControl:AddKeyPicker('trigger_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -982,7 +1010,10 @@ local function addSubtabs(name, pages)
     pcall(addSubtabsImpl, name, pages)
 end
 
-local RageGroup = Tabs.Ragebot:AddLeftGroupbox('Ragebot')
+-- Real Airflow sub tabs for Ragebot, same reasoning as Main above.
+local RageGeneralSubTab = Tabs.Ragebot:AddSubTab('General')
+local RageChecksSubTab = Tabs.Ragebot:AddSubTab('Checks')
+local RageGroup = RageGeneralSubTab:AddLeftGroupbox('Ragebot')
 local RageControl = addToggle(RageGroup, 'rage_enabled', 'Enabled', Rage, 'Enabled')
 RageControl:AddKeyPicker('rage_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -996,7 +1027,7 @@ RageGroup:AddDropdown('rage_hitpart', {
     }, Default = Rage.HitPart,
 }):OnChanged(function(value) Rage.HitPart = value end)
 addTargets(RageGroup, 'rage_targets', Rage)
-local RageChecks = Tabs.Ragebot:AddLeftGroupbox('Checks')
+local RageChecks = RageChecksSubTab:AddLeftGroupbox('Checks')
 addToggle(RageChecks, 'rage_visiblecheck', 'Wallcheck', Rage, 'VisibleCheck')
 addToggle(RageChecks, 'rage_teamcheck', 'Team Check', Rage, 'TeamCheck')
 addToggle(RageChecks, 'rage_hitscan', 'Hitscan', Rage, 'Hitscan')
@@ -1780,11 +1811,15 @@ end
 -- Adapt the Tokaihub visual controls to Linoria without changing the renderer.
 local visualPages = {}
 local function visualPage(name)
-    local page = { Name = name, Groups = {} }
+    -- A real Airflow sub tab (not a raw groupbox dumped straight on Visuals) —
+    -- this is what actually separates NPCs/Players/Zombies/Corpses/Crosshair
+    -- into their own pages instead of showing every groupbox at once.
+    local subTab = Tabs.Visuals:AddSubTab(name)
+    local page = { Name = name, Groups = {}, SubTab = subTab }
     table.insert(visualPages, page)
     function page:AddSection(info)
-        local group = info.Side == 'Right' and Tabs.Visuals:AddRightGroupbox(info.Title)
-            or Tabs.Visuals:AddLeftGroupbox(info.Title)
+        local group = info.Side == 'Right' and subTab:AddRightGroupbox(info.Title)
+            or subTab:AddLeftGroupbox(info.Title)
         table.insert(self.Groups, group)
         local section = {}
         local lastToggle
@@ -1831,7 +1866,7 @@ local PlayersPage = visualPage('Players')
 local ZombiePage = visualPage('Zombies')
 local CorpsePage = visualPage('Corpses')
 local CrosshairPage = visualPage('Crosshair')
-local CrosshairGroup = Tabs.Visuals:AddLeftGroupbox('Crosshair')
+local CrosshairGroup = CrosshairPage.SubTab:AddLeftGroupbox('Crosshair')
 table.insert(CrosshairPage.Groups, CrosshairGroup)
 local Crosshair = {
     Enabled=false, Color=Color3.new(1,1,1), Style="Static", Speed=1,
@@ -2915,11 +2950,15 @@ end
 
 do
 local function legacyPage(tab, pages, name)
-    local page = { Name = name, Groups = {} }
+    -- Real Airflow sub tab, same reasoning as visualPage above — this is what
+    -- actually separates Gun/Turret/Vehicle/Melee/Aura Kill/World Mods (and
+    -- Movement/Flight) into their own pages instead of one jumbled tab.
+    local subTab = tab:AddSubTab(name)
+    local page = { Name = name, Groups = {}, SubTab = subTab }
     table.insert(pages, page)
     function page:AddSection(info)
-        local group = info.Side == 'Right' and tab:AddRightGroupbox(info.Title)
-            or tab:AddLeftGroupbox(info.Title)
+        local group = info.Side == 'Right' and subTab:AddRightGroupbox(info.Title)
+            or subTab:AddLeftGroupbox(info.Title)
         table.insert(self.Groups, group)
         local section = {}
         local lastToggle

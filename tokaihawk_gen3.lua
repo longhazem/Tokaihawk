@@ -362,7 +362,10 @@ function Library:CreateWindow(info)
         Name = info.Title or info.Name or 'Window',
         LoadingSubtitle = info.SubTitle,
         Size = info.Size,
-        Home = false, -- Linoria scripts build their own Main tab
+        -- Airflow's built-in Home tab (profile card, FPS/ping/memory stats,
+        -- game/executor cards, feature list, changelog — README: Home). On by
+        -- default; pass info.Home = false from BRM5.lua to turn it back off.
+        Home = info.Home == nil and {} or info.Home,
         ConfigurationSaving = self._configFolder and {
             Enabled = true, FolderName = self._configFolder,
         } or nil,
@@ -752,6 +755,25 @@ function Library:CreateWindow(info)
         end
         function TabShim:AddRightGroupbox(name)
             return wrapGroupbox(tab:CreateGroupbox({ Name = name, Side = 'Right' }))
+        end
+
+        -- Airflow's real sub tabs (README "Once a tab has sub tabs
+        -- (Tab:CreateSubTab), add groupboxes and elements to the sub tabs, not
+        -- the tab") — same AddLeftGroupbox/AddRightGroupbox surface as a Tab,
+        -- just targeting the sub tab instead, so BRM5.lua's legacyPage/
+        -- visualPage wrappers (which already only ever call
+        -- tab:AddLeftGroupbox/AddRightGroupbox under the hood) work unchanged
+        -- once pointed at one of these instead of the raw tab.
+        function TabShim:AddSubTab(name, icon)
+            local subTab = tab:CreateSubTab({ Name = name, Icon = icon or 'circle' })
+            local SubTabShim = { _airflowSubTab = subTab }
+            function SubTabShim:AddLeftGroupbox(gname)
+                return wrapGroupbox(subTab:CreateGroupbox({ Name = gname, Side = 'Left' }))
+            end
+            function SubTabShim:AddRightGroupbox(gname)
+                return wrapGroupbox(subTab:CreateGroupbox({ Name = gname, Side = 'Right' }))
+            end
+            return SubTabShim
         end
 
         return TabShim
