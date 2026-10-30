@@ -595,6 +595,24 @@ function Library:CreateWindow(info)
             function Funcs:AddDropdown(idx, dinfo)
                 dinfo = dinfo or {}
                 local flag = uniqueFlag(idx)
+                local isMulti = dinfo.Multi and true or false
+
+                -- Airflow's MultipleOptions dropdown hands the callback (and
+                -- .Value) a plain LIST of selected option strings (README:
+                -- "Rows toggle independently and the callback receives a
+                -- list"). LinoriaLib's multi-select dropdown — and BRM5.lua
+                -- code written against it, e.g. addTargets' `selected[name]`
+                -- — expects a DICT { [optionName] = true } instead. Normalize
+                -- both ways here so none of that call-site code needs touching.
+                local function normalize(v)
+                    if not isMulti then return v end
+                    local dict = {}
+                    if type(v) == 'table' then
+                        for _, name in ipairs(v) do dict[name] = true end
+                    end
+                    return dict
+                end
+
                 local control = airflowGroupbox:CreateDropdown({
                     Name = dinfo.Text,
                     Flag = flag,
@@ -603,17 +621,27 @@ function Library:CreateWindow(info)
                     AllowNone = dinfo.AllowNull,
                     CurrentOption = dinfo.Default,
                     Callback = function(v)
-                        Library:SafeCallback(dinfo.Callback, v)
+                        Library:SafeCallback(dinfo.Callback, normalize(v))
                     end,
                 })
-                local DropShim = { Value = control.Value, _ctrl = control, Type = 'Dropdown' }
+                local DropShim = { Value = normalize(control.Value), _ctrl = control, Type = 'Dropdown' }
                 function DropShim:OnChanged(fn)
                     self.Changed = fn
                     Library:SafeCallback(fn, self.Value)
                 end
                 function DropShim:SetValue(v)
-                    control:Set(v)
-                    self.Value = control.Value
+                    -- Accept either shape back in: a Linoria-style dict needs
+                    -- converting to Airflow's list before Set(); an already-
+                    -- list value (or a single string for non-multi) passes
+                    -- straight through.
+                    local toSet = v
+                    if isMulti and type(v) == 'table' and next(v) ~= nil and v[1] == nil then
+                        local list = {}
+                        for name, picked in pairs(v) do if picked then table.insert(list, name) end end
+                        toSet = list
+                    end
+                    control:Set(toSet)
+                    self.Value = normalize(control.Value)
                 end
                 if flag then Toggles[flag] = DropShim; Options[flag] = DropShim end
                 return DropShim
