@@ -2646,7 +2646,7 @@ local installPreview=function(Context)
         local object:any={}
         local frame:any=Instance.new(class=="Text" and "TextLabel" or "Frame")
         frame.Name=class;frame.BorderSizePixel=0;frame.Active=false;frame.Visible=false
-        frame.ZIndex=14;frame.Parent=Preview.overlay
+        frame.ZIndex=514;frame.Parent=Preview.overlay
         local border
         if class=="Text" then
             frame.BackgroundTransparency=1;frame.RichText=false
@@ -2658,7 +2658,7 @@ local installPreview=function(Context)
         function object:Flush()
             frame.Visible=properties.Visible==true
             if not frame.Visible then return end
-            frame.ZIndex=14+(properties.ZIndex or 0)
+            frame.ZIndex=514+(properties.ZIndex or 0)
             local opacity=math.clamp(properties.Transparency or 1,0,1)
             local color=properties.Color
             if class=="Text" then
@@ -2774,14 +2774,14 @@ local installPreview=function(Context)
     local function label(parent,text,position,size,textSize)
         local object=Library:Create("TextLabel",{BackgroundTransparency=1,Text=text,Font=Library.Font,
             TextSize=textSize,TextColor3=Library.FontColor,TextXAlignment=Enum.TextXAlignment.Left,
-            TextTruncate=Enum.TextTruncate.AtEnd,Position=position,Size=size,ZIndex=12,Parent=parent})
+            TextTruncate=Enum.TextTruncate.AtEnd,Position=position,Size=size,ZIndex=512,Parent=parent})
         Library:AddToRegistry(object,{TextColor3="FontColor"})
         return object
     end
     local function button(parent,text,position,size,callback)
         local object=Library:Create("TextButton",{Text=text,Font=Library.Font,TextSize=12,
             TextColor3=Library.FontColor,BackgroundColor3=Library.MainColor,BorderSizePixel=0,
-            Position=position,Size=size,ZIndex=15,Parent=parent})
+            Position=position,Size=size,ZIndex=515,Parent=parent})
         Library:AddToRegistry(object,{TextColor3="FontColor",BackgroundColor3="MainColor"})
         Library:Create("UICorner",{CornerRadius=UDim.new(0,3),Parent=object})
         connect(object.MouseButton1Click,callback)
@@ -2789,14 +2789,22 @@ local installPreview=function(Context)
     end
     function Preview.EnsureGui()
         if Preview.panel then return end
+        -- Parented to the window's own ScreenGui (same root Window.Holder lives
+        -- under), not Window.Holder itself: Airflow's Holder clips descendants
+        -- and can carry a UIScale for responsive sizing, so a child positioned
+        -- outside its rect (this panel sits beside the window) got clipped or
+        -- mis-scaled relative to the real on-screen window. A screen-space
+        -- sibling of Holder tracks the window correctly regardless of Holder's
+        -- own clipping/scale.
+        local previewRoot=Window.Holder:FindFirstAncestorWhichIsA('ScreenGui') or Window.Holder.Parent
         local panel=Library:Create("Frame",{Name="Visuals3DPreview",BorderSizePixel=0,
             BackgroundColor3=Library.BackgroundColor,Size=UDim2.fromOffset(264,430),Visible=false,
-            ClipsDescendants=true,ZIndex=10,Parent=Window.Holder})
+            ClipsDescendants=true,ZIndex=510,Parent=previewRoot})
         Library:AddToRegistry(panel,{BackgroundColor3="BackgroundColor"})
         local border=Library:Create("UIStroke",{Color=Library.OutlineColor,Thickness=1,Parent=panel})
         Library:AddToRegistry(border,{Color="OutlineColor"})
         local accent=Library:Create("Frame",{BorderSizePixel=0,BackgroundColor3=Library.AccentColor,
-            Size=UDim2.new(1,0,0,2),ZIndex=11,Parent=panel})
+            Size=UDim2.new(1,0,0,2),ZIndex=511,Parent=panel})
         Library:AddToRegistry(accent,{BackgroundColor3="AccentColor"})
         Preview.title=label(panel,"Visuals 3D Preview",UDim2.fromOffset(12,8),UDim2.new(1,-24,0,20),14)
         Preview.subtitle=label(panel,"",UDim2.fromOffset(12,31),UDim2.new(1,-24,0,17),12)
@@ -2805,11 +2813,11 @@ local installPreview=function(Context)
         viewport.Name="Model";viewport.BackgroundTransparency=1;viewport.BorderSizePixel=0
         viewport.Position=UDim2.fromOffset(8,55);viewport.Size=UDim2.new(1,-16,1,-127)
         viewport.Ambient=Color3.fromRGB(165,169,180);viewport.LightColor=Color3.fromRGB(245,237,221)
-        viewport.LightDirection=Vector3.new(-1,-.7,-1);viewport.ZIndex=11;viewport.Active=true;viewport.Parent=panel
+        viewport.LightDirection=Vector3.new(-1,-.7,-1);viewport.ZIndex=511;viewport.Active=true;viewport.Parent=panel
         local world=Instance.new("WorldModel");world.Parent=viewport
         local camera=Instance.new("Camera");camera.FieldOfView=30;camera.Parent=viewport;viewport.CurrentCamera=camera
         local overlay=Instance.new("Frame");overlay.Name="Overlay";overlay.BackgroundTransparency=1
-        overlay.Size=UDim2.fromScale(1,1);overlay.ClipsDescendants=true;overlay.ZIndex=12;overlay.Parent=viewport
+        overlay.Size=UDim2.fromScale(1,1);overlay.ClipsDescendants=true;overlay.ZIndex=512;overlay.Parent=viewport
         Preview.empty=label(panel,"Waiting for a model…",UDim2.new(0,18,.5,-24),UDim2.new(1,-36,0,48),13)
         Preview.empty.TextWrapped=true;Preview.empty.TextXAlignment=Enum.TextXAlignment.Center
         Preview.status=label(panel,"",UDim2.new(0,12,1,-68),UDim2.new(1,-24,0,17),11)
@@ -2866,7 +2874,12 @@ local installPreview=function(Context)
         x=math.clamp(x,8,math.max(8,screen.X-width-8))
         local y=math.clamp(pos.Y,8,math.max(8,screen.Y-height-8))
         Preview.panel.Size=UDim2.fromOffset(width,height)
-        Preview.panel.Position=UDim2.fromOffset(x-pos.X,y-pos.Y)
+        -- x/y are already screen-space (same frame Window.Holder.AbsolutePosition
+        -- lives in); the panel now sits directly under the window's ScreenGui
+        -- instead of inside Holder, so no Holder-relative offset is subtracted
+        -- here anymore — that subtraction was the actual bug: it undid this
+        -- screen-space math the moment Holder had any clipping/scale of its own.
+        Preview.panel.Position=UDim2.fromOffset(x,y)
     end
     function Preview.Step(now)
         local kind=visiblePage()
