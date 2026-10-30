@@ -1,5 +1,8 @@
 local repo = 'https://raw.githubusercontent.com/longhazem/Tokaihawk/main/'
 
+-- gen3: push tokaihawk_gen3.lua (self-contained, includes Airflow) +
+-- addons/ThemeManager.lua + addons/SaveManager.lua to the SAME repo path
+-- LinoriaSrc.lua lived at, then this URL just works — same pattern as before.
 local LibrarySourceUrl = 'https://raw.githubusercontent.com/longhazem/Tokaihawk/main/tokaihawk_gen3.lua'
 local LibrarySource = LibrarySourceUrl ~= '' and game:HttpGet(LibrarySourceUrl) or readfile('tokaihawk_gen3.lua')
 
@@ -94,6 +97,14 @@ function Fonts.Apply(instance)
         instance.FontFace = Fonts.Face
     end
 end
+-- Airflow draws its own elements (toggles, sliders, tabs, labels — the whole
+-- window) from Airflow.Fonts.Regular/Medium/Bold, re-applied on every render/
+-- theme pass — it does NOT read each TextLabel's own .FontFace the way
+-- Linoria's renderer does, so patching instance.FontFace by hand (Fonts.Apply,
+-- the DescendantAdded hook below, the Library.Create wrap) only ever reaches
+-- BRM5.lua's own hand-built Instances (watermark, crosshair preview panel) —
+-- never gen3's actual UI. Push the resolved face into Airflow's real font
+-- slots too so the whole window actually changes.
 local function applyToAirflow(face)
     local airflow = Library._airflow
     if airflow and airflow.Fonts then
@@ -119,6 +130,9 @@ Library.Create = function(self, class, properties)
     return instance
 end
 
+-- Seed Airflow's font slots with the default ('Code') face before the window
+-- (and every control in it) gets built, so the very first paint is already
+-- on the right font instead of waiting for a dropdown change.
 applyToAirflow(Fonts.Face)
 
 local Window = Library:CreateWindow({
@@ -152,7 +166,7 @@ local AimUIS = game:GetService("UserInputService")
 local AimLocalPlayer = AimPlayers.LocalPlayer
 local AimCamera = workspace.CurrentCamera
 local Silent = {
-    Enabled=false,Targets={NPCs=true,Players=true},HitPart="Head",Hitscan=false,TeamCheck=false,VisibleCheck=true,GlassCheck=false,
+    Enabled=false,Targets={NPCs=true,Players=true},HitPart="Head",Hitscan=false,TeamCheck=false,VisibleCheck=true,
     MaxDistance=1000,HitChance=100,StickyAim=false,FOVEnabled=true,ShowFOV=true,FOV=120,
     FOVColor=Color3.fromRGB(224,224,224),FillFOV=false,FOVFillColor=Color3.fromRGB(224,224,224),
     FOVFillTransparency=.4,GradientFOV=false,
@@ -161,12 +175,12 @@ local Silent = {
     AutoPrediction=true,BulletDropCompensation=true,
 }
 local TriggerBotSettings = {
-    Enabled=false,Targets={NPCs=true,Players=true},TeamCheck=false,VisibleCheck=true,GlassCheck=false,
+    Enabled=false,Targets={NPCs=true,Players=true},TeamCheck=false,VisibleCheck=true,
     MaxDistance=1000,ReactionTime=50,ShootTime=100,Magnetic=false,
 }
 local Rage = {
     Enabled=false,Targets={NPCs=true,Zombies=true,Players=true},HitPart="Head",
-    Hitscan=true,TeamCheck=true,VisibleCheck=true,GlassCheck=false,FullCircle=true,
+    Hitscan=true,TeamCheck=true,VisibleCheck=true,FullCircle=true,
     DistanceCheck=true,MaxDistance=1000,FOVEnabled=false,AutoPrediction=true,BulletDropCompensation=true,
 }
 local Combat: {[string]: any} = {
@@ -323,43 +337,24 @@ combatRayParams.FilterType=Enum.RaycastFilterType.Exclude
 combatRayParams.IgnoreWater=false
 -- Match the collision group used by this game's projectile raycasts.
 pcall(function() combatRayParams.CollisionGroup="9" end)
-function Combat.Visible(actor,point,camera,glassCheck)
+function Combat.Visible(actor,point,camera)
     local c=Combat.Service();local me=c and c.Replicator and c.Replicator.LocalActor
     local excluded={camera}
     if me and me.Character then excluded[#excluded+1]=me.Character end
     combatRayParams.FilterDescendantsInstances=excluded
+    local hit=workspace:Raycast(camera.CFrame.Position,point-camera.CFrame.Position,combatRayParams)
+    if not hit then return true end
+    if actor.Character and hit.Instance:IsDescendantOf(actor.Character) then return true end
+    -- Render rigs and collision bodies may be separate. Use the same actor
+    -- identity mapping that the game's bullet-impact handler uses.
     local replicator=c and c.Replicator
     local registry=replicator and replicator.Actors
-    local origin=camera.CFrame.Position
-    local maxPasses=glassCheck and 8 or 1
-    for _=1,maxPasses do
-        local hit=workspace:Raycast(origin,point-origin,combatRayParams)
-        if not hit then return true end
-        if actor.Character and hit.Instance:IsDescendantOf(actor.Character) then return true end
-        -- Render rigs and collision bodies may be separate. Use the same actor
-        -- identity mapping that the game's bullet-impact handler uses.
-        if registry and registry[actor.UID]==actor then
-            local uid=hit.Instance:GetAttribute("ActorUID")
-            if uid==actor.UID then return true end
-            if type(replicator.GetFromBodyPart)=="function" then
-                local ok,resolvedUID=pcall(replicator.GetFromBodyPart,replicator,hit.Instance)
-                if ok and resolvedUID==actor.UID then return true end
-            end
-        end
-        -- Glass pass-through: tiếp tục raycast qua glass parts
-        if glassCheck then
-            local inst=hit.Instance
-            local ok1,t1=pcall(function() return inst:HasTag("Glass") end)
-            local ok2,t2=pcall(function() return inst:HasTag("Prefab") and inst:GetAttribute("Prefab")=="Glass" end)
-            if (ok1 and t1) or (ok2 and t2) then
-                local dir=(point-origin)
-                origin=hit.Position+dir.Unit*0.05
-            else
-                return false
-            end
-        else
-            return false
-        end
+    if not registry or registry[actor.UID]~=actor then return false end
+    local uid=hit.Instance:GetAttribute("ActorUID")
+    if uid==actor.UID then return true end
+    if type(replicator.GetFromBodyPart)=="function" then
+        local ok,resolvedUID=pcall(replicator.GetFromBodyPart,replicator,hit.Instance)
+        if ok and resolvedUID==actor.UID then return true end
     end
     return false
 end
@@ -413,7 +408,7 @@ function Combat.FindTarget(settings,camera,mouse,sticky)
             if not settings.FullCircle and not on then return nil end
             local d=settings.FullCircle and (point-origin).Magnitude or (Vector2.new(sp.X,sp.Y)-mouse).Magnitude
             if settings.FOVEnabled and d>settings.FOV then return nil end
-            if (settings.VisibleCheck or requireVisible) and not Combat.Visible(a,point,camera,settings.GlassCheck) then return nil end
+            if (settings.VisibleCheck or requireVisible) and not Combat.Visible(a,point,camera) then return nil end
             return {actor=a,part=part,position=point,distance=d}
         end
         local preferred=Combat.PickPart(a,settings,camera,mouse)
@@ -458,7 +453,7 @@ function Combat.TriggerTarget(settings,camera,mouse)
         local selected=Combat.target
         if Silent.Enabled and Combat.silentActive and selected and Combat.Allowed(selected.actor,settings)
             and (selected.actor.Position-Combat.Origin(camera)).Magnitude<=settings.MaxDistance
-            and (not settings.VisibleCheck or Combat.Visible(selected.actor,selected.position,camera,settings.GlassCheck)) then return selected.actor end
+            and (not settings.VisibleCheck or Combat.Visible(selected.actor,selected.position,camera)) then return selected.actor end
         return nil
     end
     Combat.Sync()
@@ -498,7 +493,7 @@ function Combat.TriggerTarget(settings,camera,mouse)
         end
     end
     if not closest or not Combat.Allowed(closest,settings) then return nil end
-    if settings.VisibleCheck and not Combat.Visible(closest,ray.Origin+ray.Direction*nearest,camera,settings.GlassCheck) then return nil end
+    if settings.VisibleCheck and not Combat.Visible(closest,ray.Origin+ray.Direction*nearest,camera) then return nil end
     return closest
 end
 function Combat.KeyActive(picker,_state)
@@ -829,7 +824,11 @@ local function addTargets(group, id, settings)
     end)
 end
 
-local SilentGroup = Tabs.Main:AddLeftGroupbox('Silent Aim')
+-- Real Airflow sub tabs for Main, created upfront so Silent Aim and
+-- Triggerbot land on separate pages instead of one long scroll.
+local MainSilentSubTab = Tabs.Main:AddSubTab('Silent Aim')
+local MainTriggerSubTab = Tabs.Main:AddSubTab('Triggerbot')
+local SilentGroup = MainSilentSubTab:AddLeftGroupbox('Silent Aim')
 local EnabledControl = addToggle(SilentGroup, 'silent_enabled', 'Enabled', Silent, 'Enabled')
 EnabledControl:AddKeyPicker('silent_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -873,17 +872,16 @@ addSlider(SilentGroup, 'silent_distance', 'Max Distance', Silent, 'MaxDistance',
 addToggle(SilentGroup, 'silent_fov_enabled', 'FOV Check', Silent, 'FOVEnabled')
 addToggle(SilentGroup, 'silent_sticky', 'Sticky Aim', Silent, 'StickyAim')
 
-local PredictionGroup = Tabs.Main:AddRightGroupbox('Prediction')
+local PredictionGroup = MainSilentSubTab:AddRightGroupbox('Prediction')
 addToggle(PredictionGroup, 'silent_auto_prediction', 'Auto Prediction', Silent, 'AutoPrediction')
 addToggle(PredictionGroup, 'silent_bullet_drop_compensation', 'Bullet Drop Compensation', Silent, 'BulletDropCompensation')
 
-local ChecksGroup = Tabs.Main:AddRightGroupbox('Checks')
+local ChecksGroup = MainSilentSubTab:AddRightGroupbox('Checks')
 addToggle(ChecksGroup, 'silent_teamcheck', 'Team Check', Silent, 'TeamCheck')
 addToggle(ChecksGroup, 'silent_visiblecheck', 'Wallcheck', Silent, 'VisibleCheck')
-addToggle(ChecksGroup, 'silent_glasscheck', 'Glass Check', Silent, 'GlassCheck')
 addToggle(ChecksGroup, 'silent_hitscan', 'Hitscan', Silent, 'Hitscan')
 
-local TriggerGroup = Tabs.Main:AddLeftGroupbox('Triggerbot')
+local TriggerGroup = MainTriggerSubTab:AddLeftGroupbox('Triggerbot')
 local TriggerControl = addToggle(TriggerGroup, 'trigger_enabled', 'Enabled', TriggerBotSettings, 'Enabled')
 TriggerControl:AddKeyPicker('trigger_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -895,11 +893,14 @@ addSlider(TriggerGroup, 'trigger_shoot', 'Shoot Time', TriggerBotSettings, 'Shoo
 addTargets(TriggerGroup, 'trigger_targets', TriggerBotSettings)
 addToggle(TriggerGroup, 'trigger_teamcheck', 'Team Check', TriggerBotSettings, 'TeamCheck')
 addToggle(TriggerGroup, 'trigger_visiblecheck', 'Wallcheck', TriggerBotSettings, 'VisibleCheck')
-addToggle(TriggerGroup, 'trigger_glasscheck', 'Glass Check', TriggerBotSettings, 'GlassCheck')
 addToggle(TriggerGroup, 'trigger_magnetic', 'Magnetic Trigger', TriggerBotSettings, 'Magnetic')
 addSlider(TriggerGroup, 'trigger_distance', 'Max Distance', TriggerBotSettings, 'MaxDistance', 50, 5000, 0, ' studs')
 
 -- Keep precise wheel adjustment without changing the library's slider implementation.
+-- .Container is a LinoriaLib-internal Frame reference gen3's groupboxes don't
+-- expose (Airflow builds its own Instance tree) — pcall-guarded so a missing
+-- Container just skips this nicety instead of aborting everything after it.
+pcall(function()
 for _, id in ipairs({ 'trigger_reaction', 'trigger_shoot' }) do
     local slider = Options[id]
     local text = id == 'trigger_reaction' and 'Reaction Time' or 'Shoot Time'
@@ -918,10 +919,15 @@ for _, id in ipairs({ 'trigger_reaction', 'trigger_shoot' }) do
         end))
     end
 end
+end)
 
 -- Each primary tab owns a horizontal subnavigation row and its control pages.
--- group.Container.Parent.Parent relies on Linoria's internal DOM — Airflow has
--- a different tree so this safely no-ops via pcall; content still shows inline.
+-- group.Container is a LinoriaLib-internal Frame reference gen3's groupboxes
+-- don't expose (Airflow builds its own Instance tree), so this whole nav-bar
+-- builder is wrapped in pcall below: on gen3 it safely no-ops (all the real
+-- groupboxes/controls stay visible directly on the tab, just without the
+-- subtab-style grouping/switcher bar) instead of aborting every tab built
+-- after it.
 local function addSubtabsImpl(name, pages)
     local function groupFrame(group)
         return group.Container.Parent.Parent
@@ -999,11 +1005,15 @@ local function addSubtabsImpl(name, pages)
     end
     selectPage(pages[1])
 end
+
 local function addSubtabs(name, pages)
     pcall(addSubtabsImpl, name, pages)
 end
 
-local RageGroup = Tabs.Ragebot:AddLeftGroupbox('Ragebot')
+-- Real Airflow sub tabs for Ragebot, same reasoning as Main above.
+local RageGeneralSubTab = Tabs.Ragebot:AddSubTab('General')
+local RageChecksSubTab = Tabs.Ragebot:AddSubTab('Checks')
+local RageGroup = RageGeneralSubTab:AddLeftGroupbox('Ragebot')
 local RageControl = addToggle(RageGroup, 'rage_enabled', 'Enabled', Rage, 'Enabled')
 RageControl:AddKeyPicker('rage_key', {
     Default = 'None', Mode = 'Hold', Modes = { 'Always', 'Hold', 'Toggle' },
@@ -1017,9 +1027,8 @@ RageGroup:AddDropdown('rage_hitpart', {
     }, Default = Rage.HitPart,
 }):OnChanged(function(value) Rage.HitPart = value end)
 addTargets(RageGroup, 'rage_targets', Rage)
-local RageChecks = Tabs.Ragebot:AddLeftGroupbox('Checks')
+local RageChecks = RageChecksSubTab:AddLeftGroupbox('Checks')
 addToggle(RageChecks, 'rage_visiblecheck', 'Wallcheck', Rage, 'VisibleCheck')
-addToggle(RageChecks, 'rage_glasscheck', 'Glass Check', Rage, 'GlassCheck')
 addToggle(RageChecks, 'rage_teamcheck', 'Team Check', Rage, 'TeamCheck')
 addToggle(RageChecks, 'rage_hitscan', 'Hitscan', Rage, 'Hitscan')
 addToggle(RageChecks, 'rage_distancecheck', 'Distance Check', Rage, 'DistanceCheck')
@@ -1045,7 +1054,6 @@ local Sense = (function()
     local white, black = Color3.new(1,1,1), Color3.new(0,0,0)
     local t = {
         enabled=true, limitDistance=false, maxDistance=1000, box=false, box3d=false, boxColor={white,1}, box3dColor={white,1},
-        boxStyle="Full", simpleBox=false,
         boxOutline=true, boxOutlineColor={black,1}, boxOutlineThickness=1,
         boxFill=false, boxFillColor={Color3.fromRGB(150,80,255),.2},
         healthBar=false, healthyColor=Color3.new(0,1,0), dyingColor=Color3.new(1,0,0),
@@ -1396,24 +1404,6 @@ local Sense = (function()
         d.Position=pos;d.Size=size;d.Filled=filled;d.Thickness=thickness or 1;style(d,value,override)
         return d
     end
-    local function cornerBox(o,key,pos,size,value,override)
-        local view=o.previewViewportSize or workspace.CurrentCamera.ViewportSize
-        local corner=(pos+size):Min(view)
-        pos=pos:Max(Vector2.zero)
-        size=corner-pos
-        if size.X<=0 or size.Y<=0 then return end
-        local cl=math.max(4,math.min(size.X,size.Y)*0.25)
-        local x0,y0=pos.X,pos.Y
-        local x1,y1=pos.X+size.X,pos.Y+size.Y
-        line(o,key.."cTLh",Vector2.new(x0,y0),Vector2.new(x0+cl,y0),value,1,override)
-        line(o,key.."cTLv",Vector2.new(x0,y0),Vector2.new(x0,y0+cl),value,1,override)
-        line(o,key.."cTRh",Vector2.new(x1,y0),Vector2.new(x1-cl,y0),value,1,override)
-        line(o,key.."cTRv",Vector2.new(x1,y0),Vector2.new(x1,y0+cl),value,1,override)
-        line(o,key.."cBLh",Vector2.new(x0,y1),Vector2.new(x0+cl,y1),value,1,override)
-        line(o,key.."cBLv",Vector2.new(x0,y1),Vector2.new(x0,y1-cl),value,1,override)
-        line(o,key.."cBRh",Vector2.new(x1,y1),Vector2.new(x1-cl,y1),value,1,override)
-        line(o,key.."cBRv",Vector2.new(x1,y1),Vector2.new(x1,y1-cl),value,1,override)
-    end
     local function textAt(o,key,value,pos,col,outline,override)
         local view=workspace.CurrentCamera.ViewportSize
         if pos.X<0 or pos.Y<0 or pos.X>view.X or pos.Y>view.Y then return end
@@ -1654,27 +1644,8 @@ local Sense = (function()
             local size=max-min;local cx=(min.X+max.X)*.5
             if t.boxFill then square(o,"fill",min,size,t.boxFillColor,true,1,override) end
             if t.box then
-                if t.boxStyle=="Corner" then
-                    cornerBox(o,"box",min,size,t.boxColor,override)
-                else
-                    if t.boxOutline then square(o,"boxOutline",min,size,t.boxOutlineColor,false,1+2*t.boxOutlineThickness) end
-                    square(o,"box",min,size,t.boxColor,false,1,override)
-                end
-            end
-            -- SimpleESP: SelectionBox 3D outline trên character model
-            if t.simpleBox and a.Character and (o.preview or a.Character:IsDescendantOf(workspace)) then
-                local sbox=o.adornments["simpleESP"]
-                if not sbox then
-                    sbox=Instance.new("SelectionBox")
-                    sbox.LineThickness=0.04
-                    sbox.SurfaceTransparency=1
-                    sbox.Name="SimpleESP"
-                    sbox.Parent=workspace
-                    o.adornments["simpleESP"]=sbox
-                end
-                local col=override or (color(t.boxColor))
-                sbox.Color3=col;sbox.SurfaceColor3=col
-                sbox.Adornee=a.Character;sbox.Visible=true
+                if t.boxOutline then square(o,"boxOutline",min,size,t.boxOutlineColor,false,1+2*t.boxOutlineThickness) end
+                square(o,"box",min,size,t.boxColor,false,1,override)
             end
             if t.box3d then
                 for i,edge in ipairs(edges) do
@@ -1840,11 +1811,15 @@ end
 -- Adapt the Tokaihub visual controls to Linoria without changing the renderer.
 local visualPages = {}
 local function visualPage(name)
-    local page = { Name = name, Groups = {} }
+    -- A real Airflow sub tab (not a raw groupbox dumped straight on Visuals) —
+    -- this is what actually separates NPCs/Players/Zombies/Corpses/Crosshair
+    -- into their own pages instead of showing every groupbox at once.
+    local subTab = Tabs.Visuals:AddSubTab(name)
+    local page = { Name = name, Groups = {}, SubTab = subTab }
     table.insert(visualPages, page)
     function page:AddSection(info)
-        local group = info.Side == 'Right' and Tabs.Visuals:AddRightGroupbox(info.Title)
-            or Tabs.Visuals:AddLeftGroupbox(info.Title)
+        local group = info.Side == 'Right' and subTab:AddRightGroupbox(info.Title)
+            or subTab:AddLeftGroupbox(info.Title)
         table.insert(self.Groups, group)
         local section = {}
         local lastToggle
@@ -1891,7 +1866,7 @@ local PlayersPage = visualPage('Players')
 local ZombiePage = visualPage('Zombies')
 local CorpsePage = visualPage('Corpses')
 local CrosshairPage = visualPage('Crosshair')
-local CrosshairGroup = Tabs.Visuals:AddLeftGroupbox('Crosshair')
+local CrosshairGroup = CrosshairPage.SubTab:AddLeftGroupbox('Crosshair')
 table.insert(CrosshairPage.Groups, CrosshairGroup)
 local Crosshair = {
     Enabled=false, Color=Color3.new(1,1,1), Style="Static", Speed=1,
@@ -2050,21 +2025,6 @@ local function buildTeamPage(page, team)
         Options = {"2D", "3D"},
         Default = "2D",
         Callback = function(v) boxState.kind = v; applyBox() end
-    })
-
-    Boxes:AddDropdown({
-        Text = "Box Style",
-        Flag = prefix .. "box_style",
-        Options = {"Full", "Corner"},
-        Default = "Full",
-        Callback = function(v) t.boxStyle = v end
-    })
-
-    Boxes:AddToggle({
-        Text = "Simple ESP",
-        Flag = prefix .. "simple_box",
-        Default = false,
-        Callback = function(v) t.simpleBox = v end
     })
 
     Boxes:AddColorPicker({
@@ -2585,6 +2545,7 @@ local installPreview=function(Context)
     local Library, Window, Sense = Context.Library, Context.Window, Context.Sense
     local Player, Input, RunService = Context.Player, Context.Input, Context.RunService
     local pages = Context.Pages
+    local VisualsTab = Context.VisualsTab
     local labels = {players="Players", npc="NPCs", zombies="Zombies"}
     local bodyNames = {Head=true,UpperTorso=true,LowerTorso=true,Torso=true,
         LeftUpperArm=true,LeftLowerArm=true,LeftHand=true,RightUpperArm=true,RightLowerArm=true,RightHand=true,
@@ -2601,17 +2562,21 @@ local installPreview=function(Context)
     local function validModel(model)
         return typeof(model)=="Instance" and model:IsA("Model") and model.Parent~=nil
     end
+    -- Airflow's real sub-tab system replaced the old Linoria-style custom nav
+    -- bar (page.Active/page.Button no longer exist), so "which ESP page is
+    -- currently on screen" is read straight from Airflow's own state instead:
+    -- Window._airflowWindow.CurrentTab must be the Visuals tab, and that
+    -- tab's .CurrentSubTab must match the page's own sub tab handle.
     local function visiblePage()
-        if Preview.destroyed or Library.Unloaded or not Window.Holder.Visible then return nil end
+        if Preview.destroyed or Library.Unloaded then return nil end
+        local win = Window and Window._airflowWindow
+        local visualsTab = VisualsTab and VisualsTab._airflowTab
+        if not win or not visualsTab or not win.Open then return nil end
+        if win.CurrentTab ~= visualsTab then return nil end
+        local currentSub = visualsTab.CurrentSubTab
         for kind,page in pairs(pages) do
-            if page.Active and Preview.enabled[kind] then
-                local parent=page.Button and page.Button.Parent
-                local visible=parent~=nil
-                while parent and parent~=Window.Holder do
-                    if parent:IsA("GuiObject") and not parent.Visible then visible=false;break end
-                    parent=parent.Parent
-                end
-                if visible then return kind end
+            if Preview.enabled[kind] and page.SubTab and page.SubTab._airflowSubTab==currentSub then
+                return kind
             end
         end
         return nil
@@ -2975,40 +2940,12 @@ local installPreview=function(Context)
             if Preview.LastError~=tostring(err) then Preview.LastError=tostring(err);warn("[Visuals 3D Preview]",err) end
         end
     end)
-
-    -- Sync Highlight ESP vào 3D preview model
-    local function refreshPreviewHL()
-        if not Preview.model or not Preview.model.Parent then return end
-        local kind = Preview.actor and Preview.actor.Kind
-        local cfg = kind and Sense.highlightSettings and Sense.highlightSettings[kind]
-        local espEnabled = Sense.teamSettings[kind] and Sense.teamSettings[kind].enabled
-        local hl = Preview.model:FindFirstChildOfClass("Highlight")
-        if cfg and cfg.enabled and espEnabled then
-            if not hl then
-                hl = Instance.new("Highlight")
-                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                hl.Parent = Preview.model
-            end
-            if kind == "zombies" then
-                hl.FillColor = (cfg.abilityColors and cfg.abilityColors[3]) or cfg.fillColor
-            else
-                hl.FillColor = cfg.fillColor
-            end
-            hl.OutlineColor = cfg.outlineColor
-            hl.FillTransparency = cfg.fillTransp
-            hl.OutlineTransparency = cfg.outlineTransp
-        elseif hl then
-            hl:Destroy()
-        end
-    end
-    Preview.RefreshHL = refreshPreviewHL
-    connect(RunService.Heartbeat, refreshPreviewHL)
-
     return Preview
 end
 
 local preview=installPreview({Library=Library,Window=Window,Sense=Sense,Player=AimLocalPlayer,
     Input=AimUIS,RunService=AimRunService,IsAlive=Combat.IsAlive,
+    VisualsTab=Tabs.Visuals,
     Pages={players=PlayersPage,npc=NpcPage,zombies=ZombiePage}})
 Combat.Preview=preview
 local destroyWithPreview=Combat.Destroy
@@ -3019,11 +2956,15 @@ end
 
 do
 local function legacyPage(tab, pages, name)
-    local page = { Name = name, Groups = {} }
+    -- Real Airflow sub tab, same reasoning as visualPage above — this is what
+    -- actually separates Gun/Turret/Vehicle/Melee/Aura Kill/World Mods (and
+    -- Movement/Flight) into their own pages instead of one jumbled tab.
+    local subTab = tab:AddSubTab(name)
+    local page = { Name = name, Groups = {}, SubTab = subTab }
     table.insert(pages, page)
     function page:AddSection(info)
-        local group = info.Side == 'Right' and tab:AddRightGroupbox(info.Title)
-            or tab:AddLeftGroupbox(info.Title)
+        local group = info.Side == 'Right' and subTab:AddRightGroupbox(info.Title)
+            or subTab:AddLeftGroupbox(info.Title)
         table.insert(self.Groups, group)
         local section = {}
         local lastToggle
@@ -3514,11 +3455,11 @@ do
             end
         end
     end)
-    Combat.Movement._miscSection = right
 end
 
 -- ── SPINBOT ──────────────────────────────────────────────────────
 do
+    local SpinSec = movementPages[1]:AddSection({Title="Spinbot", Side="Right"})
     local spinEnabled = false
     local spinSpeed = 20
     local spinHeartConn = nil
@@ -3588,31 +3529,10 @@ do
         end)
     end
 
-    Combat.Movement._miscSection:AddToggle({Text="Enable Spinbot", Flag="spinbot_enabled", Default=false,
+    SpinSec:AddToggle({Text="Enable Spinbot", Flag="spinbot_enabled", Default=false,
         Callback=function(v) spinEnabled=v; bindSpin() end})
-    Combat.Movement._miscSection:AddSlider({Text="Spin Speed", Flag="spinbot_speed", Min=1, Max=100, Default=20, Rounding=1, Suffix="",
+    SpinSec:AddSlider({Text="Spin Speed", Flag="spinbot_speed", Min=1, Max=100, Default=20, Rounding=1, Suffix="",
         Callback=function(v) spinSpeed=v end})
-
-    -- Third Person Unlock
-    local tpEnabled = false
-    Combat.Movement._miscSection:AddToggle({Text="Third Person Unlock", Flag="thirdperson_enabled", Default=false,
-        Callback=function(v)
-            tpEnabled=v
-            if v then
-                task.spawn(function()
-                    while tpEnabled do
-                        pcall(function()
-                            for _,t in ipairs(getgc(true)) do
-                                if type(t)=="table" and rawget(t,"FIRST_PERSON")~=nil then
-                                    t.FIRST_PERSON=false
-                                end
-                            end
-                        end)
-                        task.wait(0.8)
-                    end
-                end)
-            end
-        end})
 
     local prevDestroySpinbot = Combat.Destroy
     Combat.Destroy = function()
@@ -3630,6 +3550,7 @@ local GunPage = legacyPage(Tabs.Mods, modPages, 'Gun Mods')
 local TurretPage = legacyPage(Tabs.Mods, modPages, 'Turret Mods')
 local VehiclePage = legacyPage(Tabs.Mods, modPages, 'Vehicle Mods')
 local MeleePage = legacyPage(Tabs.Mods, modPages, 'Melee Mods')
+local AKPage = legacyPage(Tabs.Mods, modPages, 'Aura Kill V3')
 local GunVisualsPage = GunPage
 local Gun: {[string]: any}={NoRecoil=false,InstantADS=false,NoSway=false,NoSpread=false,SpreadReduction=100,
     UnlockModes=false,AutoReload=false,ForceHeadshot=false,active=true,originals={},hooks={},nextResolve=0,
@@ -4288,6 +4209,201 @@ do
         task.spawn(function() AK2_findNet(); AK2_getRemote() end)
     end})
 
+    -- ── Aura Kill V3 ──────────────────────────────────────────────────────────
+    -- RINGRING position layer: ForceNextPosition + SimulatePosition +
+    -- FireNextPosition + ServerPosition (impact vec) + CheckCharacterControllable
+    -- Per-UID cooldown, multi-target sorted by distance.
+    -- Reuses AK2_findNet / AK2_fire already defined above.
+    local AK3: {[string]: any} = {
+        enabled      = false,
+        killAI       = true,
+        killZombie   = true,
+        killPlayer   = false,
+        hitPart      = "Head",
+        headYOffset  = 1.5,
+        maxPerCycle  = 4,
+        cooldown     = 0.55,
+        range        = 50,
+        rangeMargin  = 0.3,
+        impactDelay  = 0.28,
+        decoyEnabled = true,
+        decoyOffset  = 3,
+        _lastFire    = {},
+    }
+    Combat.AK3 = AK3
+
+    local ak3DecoyConn = nil
+    local ak3DecoyPos: Vector3? = nil
+
+    local function ak3_rep()
+        local svc = Combat.Service()
+        return svc and svc.Replicator
+    end
+
+    -- Nhân vật đứng yên: "from" luôn là vị trí thật, không bao giờ lấy từ decoy —
+    -- tránh việc frame sau đọc lại vị trí giả rồi tưởng mình đang đứng cạnh NPC vừa spoof.
+    local function ak3_reportedPos()
+        local rep = ak3_rep(); local a = rep and rep.LocalActor
+        if a then
+            local ok, pos = pcall(function() return a.Position end)
+            if ok and typeof(pos) == "Vector3" then return pos end
+        end
+        local char = AimPlayers.LocalPlayer.Character  -- FIX: file này đặt tên AimPlayers, không phải Players
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+        if root then return root.Position end
+        return nil
+    end
+
+    local function ak3_serverPos()
+        local rep = ak3_rep(); local a = rep and rep.LocalActor
+        if not a then return nil end
+        local ok, sp = pcall(function() return a.ServerPosition end)
+        if ok and typeof(sp) == "Vector3" then return sp end
+        return nil
+    end
+
+    -- RINGRING: CheckCharacterControllable — guard before each fire tick
+    local function ak3_isControllable()
+        local rep = ak3_rep(); if not rep then return true end
+        local a = rep.LocalActor; if not a then return false end
+        local ok, v = pcall(function() return a:CheckCharacterControllable() end)
+        if ok then return v ~= false end
+        local ok2, v2 = pcall(function() return a.CharacterControllable end)
+        if ok2 and v2 ~= nil then return v2 ~= false end
+        return true
+    end
+
+    -- ĐÃ ĐỐI CHIẾU VỚI MTC game_tree DUMP THẬT (ReplicatorService.lua):
+    -- ForceNextPosition và SimulatedPosition (có "d") là PROPERTY — set thẳng bằng "=".
+    -- Không hề tồn tại hàm SimulatePosition()/FireNextPosition() nào trong game (grep 0 kết quả) —
+    -- bản cũ gọi chúng như method, pcall nuốt lỗi âm thầm, không crash nhưng cũng không làm gì.
+    -- ReplicatorService:Update() (chạy mỗi frame) tự đọc property này và gửi
+    -- FireUnreliableServer("ReplicateMovement", ...) lên server — không cần tự "fire" gì cả.
+    local function ak3_pushPos(pos)
+        local rep = ak3_rep(); local a = rep and rep.LocalActor
+        if not a then return end
+        pcall(function() a.ForceNextPosition = pos end)
+        pcall(function() a.SimulatedPosition = pos end)
+    end
+
+    local function ak3_tearDecoy()
+        if ak3DecoyConn then ak3DecoyConn:Disconnect(); ak3DecoyConn = nil end
+        ak3DecoyPos = nil
+        local rep = ak3_rep(); local a = rep and rep.LocalActor
+        if a then pcall(function() a.ForceNextPosition = nil end) end
+    end
+
+    -- Main aura loop
+    table.insert(Combat.connections, AimRunService.Heartbeat:Connect(function()
+        if not AK3.enabled then return end
+        if not ak3_isControllable() then return end
+        local net = AK2_findNet(); if not net then return end
+        local rep = ak3_rep(); if not rep then return end
+        local registry = rep.Actors; if not registry then return end
+        local from = ak3_reportedPos(); if not from then return end
+        local now = os.clock()
+
+        local candidates = {}
+        for uid, a in pairs(registry) do
+            if not Combat.IsAlive(a) then continue end
+            local kind = Combat.Kind(a); if not kind then continue end
+            local allow = false
+            if kind=="Zombies" and AK3.killZombie then allow=true end
+            if kind=="NPCs"    and AK3.killAI     then allow=true end
+            if kind=="Players" and AK3.killPlayer then allow=true end
+            if not allow then continue end
+            if (now-(AK3._lastFire[uid] or 0)) < AK3.cooldown then continue end
+            local pos = a.Position
+            if typeof(pos) ~= "Vector3" then continue end
+            local dist = (pos - from).Magnitude
+            if dist > AK3.range then continue end
+            table.insert(candidates, {uid=uid, pos=pos, dist=dist})
+        end
+        table.sort(candidates, function(x, y) return x.dist < y.dist end)
+
+        local fired = 0
+        for _, entry in ipairs(candidates) do
+            if fired >= AK3.maxPerCycle then break end
+            AK3._lastFire[entry.uid] = now
+            -- Push vị trí giả MỘT LẦN trước Slash — ForceNextPosition/SimulatedPosition
+            -- tự bị ReplicatorService:Update() xóa sau khi gửi 1 lần lên server,
+            -- không cần giữ liên tục → nhân vật không "đi theo" NPC, đứng yên tại chỗ.
+            local spawnPos = entry.pos + Vector3.new(0, 0.5, 0)
+            ak3_pushPos(spawnPos)
+            AK2_fire(net, "InventoryAction", "Slash", math.random(1, 3))
+            local uid2 = entry.uid
+            local hitPos = {entry.pos.X, entry.pos.Y + AK3.headYOffset, entry.pos.Z}
+            task.delay(AK3.impactDelay, function()
+                if not AK3.enabled then return end
+                local n2 = AK2_findNet(); if not n2 then return end
+                -- Push lần 2 ngay trước Impact — đúng "Firmenexposition" xuất hiện 2 lần
+                -- trong list RINGRING. Vẫn chỉ 1 lần, không lặp lại mỗi frame.
+                ak3_pushPos(spawnPos)
+                AK2_fire(n2, "InventoryAction", "Impact", hitPos, uid2, AK3.hitPart)
+            end)
+            fired += 1
+        end
+    end))
+
+    -- Heartbeat RIÊNG chỉ cho decoy thủ công (nút "Drop Decoy") — không liên quan
+    -- đến aura loop ở trên, vì điểm decoy thả tay cần giữ liên tục mới đứng yên được ở đó.
+    table.insert(Combat.connections, AimRunService.Heartbeat:Connect(function()
+        if not AK3.enabled or not AK3.decoyEnabled or not ak3DecoyPos then return end
+        ak3_pushPos(ak3DecoyPos)
+    end))
+
+    -- AK3 lives on its own subtab: Mods → "Aura Kill V3"
+    local ak3l = AKPage:AddSection({Title="Aura Kill V3",Side="Left"})
+    local ak3r = AKPage:AddSection({Title="Decoy & Net",Side="Right"})
+
+    ak3l:AddToggle({Text="Enable",Flag="ak3_enabled",Default=false,
+        Callback=function(v) AK3.enabled=v end})
+    ak3l:AddToggle({Text="Kill NPCs",Flag="ak3_kill_ai",Default=true,
+        Callback=function(v) AK3.killAI=v end})
+    ak3l:AddToggle({Text="Kill Zombies",Flag="ak3_kill_zombie",Default=true,
+        Callback=function(v) AK3.killZombie=v end})
+    ak3l:AddToggle({Text="Kill Players",Flag="ak3_kill_player",Default=false,
+        Callback=function(v) AK3.killPlayer=v end})
+    ak3l:AddDropdown({Text="Hit Part",Flag="ak3_hitpart",
+        Options={"Head","UpperTorso","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg"},
+        Default="Head",
+        Callback=function(v) AK3.hitPart=v end})
+    ak3l:AddSlider({Text="Max Targets/Tick",Flag="ak3_max_targets",
+        Min=1,Max=20,Default=4,Rounding=1,Suffix="",
+        Callback=function(v) AK3.maxPerCycle=math.clamp(v,1,20) end})
+    ak3l:AddSlider({Text="Hit Cooldown",Flag="ak3_cooldown",
+        Min=0.05,Max=2.0,Default=0.55,Rounding=0.05,Suffix=" s",
+        Callback=function(v) AK3.cooldown=math.clamp(v,0.05,2.0) end})
+    ak3l:AddSlider({Text="Range",Flag="ak3_range",
+        Min=3,Max=100,Default=50,Rounding=1,Suffix=" st",
+        Callback=function(v) AK3.range=math.clamp(v,3,100) end})
+    ak3l:AddSlider({Text="Impact Delay",Flag="ak3_impact_delay",
+        Min=0,Max=1,Default=0.28,Rounding=0.02,Suffix=" s",
+        Callback=function(v) AK3.impactDelay=math.clamp(v,0,1) end})
+
+    ak3r:AddToggle({Text="Decoy Position",Flag="ak3_decoy",Default=true,
+        Callback=function(v) AK3.decoyEnabled=v; if not v then ak3_tearDecoy() end end})
+    ak3r:AddSlider({Text="Decoy Offset",Flag="ak3_decoy_offset",
+        Min=0,Max=10,Default=3,Rounding=0.5,Suffix=" st",
+        Callback=function(v) AK3.decoyOffset=math.clamp(v,0,10) end})
+    ak3r:AddButton({Text="Drop Decoy (Crosshair)",Callback=function()
+        if not AK3.decoyEnabled then return end
+        local cam = workspace.CurrentCamera
+        local vp = cam.ViewportSize
+        local ray = cam:ViewportPointToRay(vp.X/2, vp.Y/2)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local ign = {cam}
+        if Players.LocalPlayer.Character then table.insert(ign, Players.LocalPlayer.Character) end
+        params.FilterDescendantsInstances = ign
+        local r = workspace:Raycast(ray.Origin, ray.Direction*300, params)
+        if r then ak3DecoyPos = r.Position + Vector3.new(0, AK3.decoyOffset, 0) end
+    end})
+    ak3r:AddButton({Text="Recall Decoy",Callback=function() ak3_tearDecoy() end})
+    ak3r:AddButton({Text="Rescan Net",Callback=function()
+        AK2._net=nil; AK2._remote=nil; AK2._netRetry=0
+        task.spawn(function() AK2_findNet(); AK2_getRemote() end)
+    end})
 
     local vp=VehiclePage
     local vl=vp:AddSection({Title="Driving",Side="Left"});local vr=vp:AddSection({Title="Flight",Side="Right"})
@@ -4842,10 +4958,16 @@ do
 local WMLighting = game:GetService("Lighting")
 local VisualsPage = legacyPage(Tabs.Mods, modPages, 'World Mods')
 -- Track the Linoria rows belonging to each conditional control.
+-- group.Container is a LinoriaLib-internal Frame reference gen3's groupboxes
+-- don't expose, so this row-diffing enhancement only wires up when it's
+-- present; without it, World Mods sections still build and work fully, just
+-- without the preset-driven per-control show/hide (wm_setVisible below
+-- already no-ops safely when control.SetVisible was never set).
 local addWorldSection = VisualsPage.AddSection
 VisualsPage.AddSection = function(self, info)
     local section = addWorldSection(self, info)
     local group = self.Groups[#self.Groups]
+    if not group.Container then return section end
     for _, method in ipairs({ 'AddSlider', 'AddDropdown' }) do
         local addControl = section[method]
         section[method] = function(_, data)
@@ -5343,6 +5465,30 @@ Combat.Destroy = function()
     destroyBeforeWorld()
 end
 
+end
+
+do
+    -- Third Person Unlock — right side of the existing Movement page
+    local CharSec=movementPages[1]:AddSection({Title="Character",Side="Right"})
+    local tpEnabled=false
+    CharSec:AddToggle({Text="Third Person Unlock",Flag="thirdperson_enabled",Default=false,
+        Callback=function(v)
+            tpEnabled=v
+            if v then
+                task.spawn(function()
+                    while tpEnabled do
+                        pcall(function()
+                            for _,t in ipairs(getgc(true)) do
+                                if type(t)=="table" and rawget(t,"FIRST_PERSON")~=nil then
+                                    t.FIRST_PERSON=false
+                                end
+                            end
+                        end)
+                        task.wait(0.8)
+                    end
+                end)
+            end
+        end})
 end
 
 addSubtabs('Movement', movementPages)
