@@ -502,16 +502,27 @@ function Library:CreateWindow(info)
             function Funcs:AddToggle(idx, tinfo)
                 tinfo = tinfo or {}
                 local flag = uniqueFlag(idx)
+                -- BRM5.lua's universal pattern is `control = group:AddToggle(idx, {Text=..})`
+                -- with NO Callback in that info table, then a SEPARATE
+                -- `control:OnChanged(fn)` call right after to attach the real
+                -- behaviour (every addToggle/legacyPage/visualPage helper does
+                -- this). ToggleShim is declared before CreateToggle and
+                -- referenced here as an upvalue so the real Airflow callback
+                -- always calls whatever :OnChanged most recently set — not just
+                -- a Callback that was never there in the first place.
+                local ToggleShim
                 local control = airflowGroupbox:CreateToggle({
                     Name = tinfo.Text,
                     Flag = flag,
                     CurrentValue = tinfo.Default or false,
                     Tooltip = type(tinfo.Tooltip) == 'string' and tinfo.Tooltip or nil,
                     Callback = function(v)
+                        ToggleShim.Value = v
                         Library:SafeCallback(tinfo.Callback, v)
+                        Library:SafeCallback(ToggleShim.Changed, v)
                     end,
                 })
-                local ToggleShim = { Value = control.Value, _ctrl = control, Type = 'Toggle' }
+                ToggleShim = { Value = control.Value, _ctrl = control, Type = 'Toggle' }
 
                 function ToggleShim:OnChanged(fn)
                     self.Changed = fn
@@ -526,19 +537,22 @@ function Library:CreateWindow(info)
                 function ToggleShim:AddColorPicker(cidx, cinfo)
                     cinfo = cinfo or {}
                     local cflag = uniqueFlag(cidx)
+                    local CPShim
                     local cp = airflowGroupbox:CreateColorPicker({
                         Name = cinfo.Title or 'Color',
                         Flag = cflag,
                         Color = cinfo.Default,
                         Callback = function(c)
+                            CPShim.Value = c
                             Library:SafeCallback(cinfo.Callback, c)
+                            Library:SafeCallback(CPShim.Changed, c)
                         end,
                     })
                     -- Airflow's ColorPicker has no alpha/transparency channel (README:
                     -- .Value is a plain Color3) — BRM5.lua reads picker.Transparency
                     -- for FOV fill alpha etc, so keep it as a static field seeded from
                     -- the caller's default. Not live-adjustable from the UI yet.
-                    local CPShim = {
+                    CPShim = {
                         Value = cp.Value, _ctrl = cp, Type = 'ColorPicker',
                         Transparency = cinfo.Transparency or 0,
                     }
@@ -568,6 +582,7 @@ function Library:CreateWindow(info)
             function Funcs:AddSlider(idx, sinfo)
                 sinfo = sinfo or {}
                 local flag = uniqueFlag(idx)
+                local SliderShim
                 local control = airflowGroupbox:CreateSlider({
                     Name = sinfo.Text,
                     Flag = flag,
@@ -576,10 +591,12 @@ function Library:CreateWindow(info)
                     Suffix = sinfo.Suffix,
                     CurrentValue = sinfo.Default,
                     Callback = function(v)
+                        SliderShim.Value = v
                         Library:SafeCallback(sinfo.Callback, v)
+                        Library:SafeCallback(SliderShim.Changed, v)
                     end,
                 })
-                local SliderShim = { Value = control.Value, _ctrl = control, Type = 'Slider' }
+                SliderShim = { Value = control.Value, _ctrl = control, Type = 'Slider' }
                 function SliderShim:OnChanged(fn)
                     self.Changed = fn
                     Library:SafeCallback(fn, self.Value)
@@ -613,6 +630,7 @@ function Library:CreateWindow(info)
                     return dict
                 end
 
+                local DropShim
                 local control = airflowGroupbox:CreateDropdown({
                     Name = dinfo.Text,
                     Flag = flag,
@@ -621,10 +639,13 @@ function Library:CreateWindow(info)
                     AllowNone = dinfo.AllowNull,
                     CurrentOption = dinfo.Default,
                     Callback = function(v)
-                        Library:SafeCallback(dinfo.Callback, normalize(v))
+                        local value = normalize(v)
+                        DropShim.Value = value
+                        Library:SafeCallback(dinfo.Callback, value)
+                        Library:SafeCallback(DropShim.Changed, value)
                     end,
                 })
-                local DropShim = { Value = normalize(control.Value), _ctrl = control, Type = 'Dropdown' }
+                DropShim = { Value = normalize(control.Value), _ctrl = control, Type = 'Dropdown' }
                 function DropShim:OnChanged(fn)
                     self.Changed = fn
                     Library:SafeCallback(fn, self.Value)
@@ -677,6 +698,7 @@ function Library:CreateWindow(info)
             function Funcs:AddInput(idx, iinfo)
                 iinfo = iinfo or {}
                 local flag = uniqueFlag(idx)
+                local InputShim
                 local control = airflowGroupbox:CreateInput({
                     Name = iinfo.Text,
                     Flag = flag,
@@ -684,10 +706,12 @@ function Library:CreateWindow(info)
                     CurrentValue = iinfo.Default,
                     Numeric = iinfo.Numeric,
                     Callback = function(v, enterPressed)
+                        InputShim.Value = v
                         Library:SafeCallback(iinfo.Callback, v, enterPressed)
+                        Library:SafeCallback(InputShim.Changed, v)
                     end,
                 })
-                local InputShim = { Value = control.Value, _ctrl = control, Type = 'Input' }
+                InputShim = { Value = control.Value, _ctrl = control, Type = 'Input' }
                 function InputShim:OnChanged(fn)
                     self.Changed = fn
                     Library:SafeCallback(fn, self.Value)
