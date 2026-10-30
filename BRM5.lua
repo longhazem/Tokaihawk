@@ -920,7 +920,9 @@ for _, id in ipairs({ 'trigger_reaction', 'trigger_shoot' }) do
 end
 
 -- Each primary tab owns a horizontal subnavigation row and its control pages.
-local function addSubtabs(name, pages)
+-- group.Container.Parent.Parent relies on Linoria's internal DOM — Airflow has
+-- a different tree so this safely no-ops via pcall; content still shows inline.
+local function addSubtabsImpl(name, pages)
     local function groupFrame(group)
         return group.Container.Parent.Parent
     end
@@ -996,6 +998,9 @@ local function addSubtabs(name, pages)
         end))
     end
     selectPage(pages[1])
+end
+local function addSubtabs(name, pages)
+    pcall(addSubtabsImpl, name, pages)
 end
 
 local RageGroup = Tabs.Ragebot:AddLeftGroupbox('Ragebot')
