@@ -2538,9 +2538,14 @@ do
 end
 
 addSubtabs('Visuals', visualPages)
--- Visuals 3D Preview: Players, NPCs and Zombies.
+-- Visuals 3D Preview: Players, NPCs and Zombies -- the original BRM5.lua
+-- preview restored in full (orbit camera, drag/zoom, live ESP-style overlay
+-- drawn over the model, chams), just rehoused for Airflow: visiblePage()
+-- reads Airflow's real CurrentTab/CurrentSubTab instead of the defunct
+-- Linoria nav-bar fields, and the panel is a fixed box docked inside
+-- Window.Holder instead of a screen-space floater.
 do
--- Installs an isolated, category-aware preview into an existing Linoria menu.
+-- Installs an isolated, category-aware preview into an existing menu.
 local installPreview=function(Context)
     local Library, Window, Sense = Context.Library, Context.Window, Context.Sense
     local Player, Input, RunService = Context.Player, Context.Input, Context.RunService
@@ -2562,11 +2567,11 @@ local installPreview=function(Context)
     local function validModel(model)
         return typeof(model)=="Instance" and model:IsA("Model") and model.Parent~=nil
     end
-    -- Airflow's real sub-tab system replaced the old Linoria-style custom nav
-    -- bar (page.Active/page.Button no longer exist), so "which ESP page is
-    -- currently on screen" is read straight from Airflow's own state instead:
-    -- Window._airflowWindow.CurrentTab must be the Visuals tab, and that
-    -- tab's .CurrentSubTab must match the page's own sub tab handle.
+    -- Airflow's real sub-tab system replaced Linoria's custom nav bar
+    -- (page.Active/page.Button don't exist on it), so "which ESP page is on
+    -- screen" is read straight from Airflow's own state: Window.CurrentTab
+    -- must be the Visuals tab, and that tab's CurrentSubTab must be this
+    -- page's own sub tab.
     local function visiblePage()
         if Preview.destroyed or Library.Unloaded then return nil end
         local win = Window and Window._airflowWindow
@@ -2624,7 +2629,7 @@ local installPreview=function(Context)
     end
     function Preview.ClearModel()
         if Preview.object then Sense.DestroyPreviewObject(Preview.object);Preview.object=nil end
-        if Preview.world then Preview.world:ClearAllChildren() end
+        if Preview.ui then Preview.ui.World:ClearAllChildren() end
         Preview.model=nil;Preview.actor=nil;Preview.source=nil
         table.clear(Preview.chams)
     end
@@ -2646,7 +2651,7 @@ local installPreview=function(Context)
         local object:any={}
         local frame:any=Instance.new(class=="Text" and "TextLabel" or "Frame")
         frame.Name=class;frame.BorderSizePixel=0;frame.Active=false;frame.Visible=false
-        frame.ZIndex=514;frame.Parent=Preview.overlay
+        frame.ZIndex=514;frame.Parent=Preview.ui.Overlay
         local border
         if class=="Text" then
             frame.BackgroundTransparency=1;frame.RichText=false
@@ -2737,7 +2742,7 @@ local installPreview=function(Context)
         local humanoid=model:FindFirstChildOfClass("Humanoid")
         if humanoid then humanoid.DisplayDistanceType=Enum.HumanoidDisplayDistanceType.None end
         if root.Name=="Root" or root.Name=="HumanoidRootPart" then root.Transparency=1 end
-        model.PrimaryPart=root;model.Name=source.label;model.Parent=Preview.world
+        model.PrimaryPart=root;model.Name=source.label;model.Parent=Preview.ui.World
         local sourceActor=source.actor
         local maxHealth=sourceActor and type(sourceActor.MaxHealth)=="number" and sourceActor.MaxHealth or 100
         local health=sourceActor and type(sourceActor.Health)=="number" and sourceActor.Health or maxHealth*.75
@@ -2762,7 +2767,7 @@ local installPreview=function(Context)
                 end
                 if overlay:IsA("MeshPart") then overlay.TextureID="" end
                 overlay.Name="PreviewChams";overlay.Size=part.Size+Vector3.one*.012
-                overlay.Material=Enum.Material.SmoothPlastic;overlay.Transparency=1;overlay.Parent=Preview.world
+                overlay.Material=Enum.Material.SmoothPlastic;overlay.Transparency=1;overlay.Parent=Preview.ui.World
                 Preview.chams[#Preview.chams+1]=overlay
             end
         end
@@ -2771,87 +2776,31 @@ local installPreview=function(Context)
         Preview.LastError=nil
         return true
     end
-    local function label(parent,text,position,size,textSize)
-        local object=Library:Create("TextLabel",{BackgroundTransparency=1,Text=text,Font=Library.Font,
-            TextSize=textSize,TextColor3=Library.FontColor,TextXAlignment=Enum.TextXAlignment.Left,
-            TextTruncate=Enum.TextTruncate.AtEnd,Position=position,Size=size,ZIndex=512,Parent=parent})
-        Library:AddToRegistry(object,{TextColor3="FontColor"})
-        return object
-    end
-    local function button(parent,text,position,size,callback)
-        local object=Library:Create("TextButton",{Text=text,Font=Library.Font,TextSize=12,
-            TextColor3=Library.FontColor,BackgroundColor3=Library.MainColor,BorderSizePixel=0,
-            Position=position,Size=size,ZIndex=515,Parent=parent})
-        Library:AddToRegistry(object,{TextColor3="FontColor",BackgroundColor3="MainColor"})
-        Library:Create("UICorner",{CornerRadius=UDim.new(0,3),Parent=object})
-        connect(object.MouseButton1Click,callback)
-        return object
-    end
+    -- Chrome (panel/viewport/camera/overlay/buttons/drag/zoom) now lives in
+    -- the adapter itself as a native element (group:AddPreview) instead of
+    -- being hand-built here with raw Library:Create/Instance.new calls. This
+    -- function only wires that element up and keeps the game-specific parts
+    -- (model resolving/building, per-frame ESP projection) which the adapter
+    -- has no business knowing about.
     function Preview.EnsureGui()
-        if Preview.panel then return end
-        -- A fixed box living directly INSIDE the window (parented to
-        -- Window.Holder itself, anchored bottom-left with plain UDim2 Scale/
-        -- Offset) instead of a panel trying to float beside the window on
-        -- screen. Being a real child of Holder means Roblox moves, scales and
-        -- clips it together with the rest of the window automatically — no
-        -- screen-space math, no side-picking, no corner-overlap case to get
-        -- wrong. The tab rail sits along the window's right edge, so the
-        -- bottom-left corner is clear of it.
-        local panel=Library:Create("Frame",{Name="Visuals3DPreview",BorderSizePixel=0,
-            BackgroundColor3=Library.BackgroundColor,
-            AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,16,1,-16),Size=UDim2.fromOffset(236,300),
-            Visible=false,ClipsDescendants=true,ZIndex=510,Parent=Window.Holder})
-        Library:AddToRegistry(panel,{BackgroundColor3="BackgroundColor"})
-        -- Airflow rounds every card/window corner (default 10px, scales with
-        -- Airflow:SetCornerRadius); a hard-cornered panel sitting right next to
-        -- the window's rounded edges is its own "doesn't match the UI" tell.
-        -- ClipsDescendants on the panel masks every child (accent bar, viewport)
-        -- to this same rounded shape, so nothing extra is needed on them.
-        Library:Create("UICorner",{CornerRadius=UDim.new(0,10),Parent=panel})
-        local border=Library:Create("UIStroke",{Color=Library.OutlineColor,Thickness=1,Parent=panel})
-        Library:AddToRegistry(border,{Color="OutlineColor"})
-        local accent=Library:Create("Frame",{BorderSizePixel=0,BackgroundColor3=Library.AccentColor,
-            Size=UDim2.new(1,0,0,2),ZIndex=511,Parent=panel})
-        Library:AddToRegistry(accent,{BackgroundColor3="AccentColor"})
-        Preview.title=label(panel,"Visuals 3D Preview",UDim2.fromOffset(12,8),UDim2.new(1,-24,0,20),14)
-        Preview.subtitle=label(panel,"",UDim2.fromOffset(12,31),UDim2.new(1,-24,0,17),12)
-        Preview.subtitle.TextTransparency=.25
-        local viewport=Instance.new("ViewportFrame")
-        viewport.Name="Model";viewport.BackgroundTransparency=1;viewport.BorderSizePixel=0
-        viewport.Position=UDim2.fromOffset(8,55);viewport.Size=UDim2.new(1,-16,1,-127)
-        viewport.Ambient=Color3.fromRGB(165,169,180);viewport.LightColor=Color3.fromRGB(245,237,221)
-        viewport.LightDirection=Vector3.new(-1,-.7,-1);viewport.ZIndex=511;viewport.Active=true;viewport.Parent=panel
-        local world=Instance.new("WorldModel");world.Parent=viewport
-        local camera=Instance.new("Camera");camera.FieldOfView=30;camera.Parent=viewport;viewport.CurrentCamera=camera
-        local overlay=Instance.new("Frame");overlay.Name="Overlay";overlay.BackgroundTransparency=1
-        overlay.Size=UDim2.fromScale(1,1);overlay.ClipsDescendants=true;overlay.ZIndex=512;overlay.Parent=viewport
-        Preview.empty=label(panel,"Waiting for a model…",UDim2.new(0,18,.5,-24),UDim2.new(1,-36,0,48),13)
-        Preview.empty.TextWrapped=true;Preview.empty.TextXAlignment=Enum.TextXAlignment.Center
-        Preview.status=label(panel,"",UDim2.new(0,12,1,-68),UDim2.new(1,-24,0,17),11)
-        Preview.hint=label(panel,"Drag to rotate · Scroll to zoom",UDim2.new(0,12,1,-49),UDim2.new(1,-24,0,15),11)
-        Preview.hint.TextTransparency=.35
-        Preview.panel=panel;Preview.viewport=viewport;Preview.world=world;Preview.camera=camera;Preview.overlay=overlay
-        Preview.reset=button(panel,"Reset view",UDim2.new(0,12,1,-29),UDim2.new(.5,-18,0,22),function()
+        if Preview.ui then return end
+        local host=(pages.players and pages.players.Groups[1]) or (pages.npc and pages.npc.Groups[1])
+            or (pages.zombies and pages.zombies.Groups[1])
+        if not host or not host.AddPreview then return end
+        local ui=host:AddPreview({Title="Visuals 3D Preview",Hint="Drag to rotate Â· Scroll to zoom"})
+        ui:AddButton("Reset view",'left',function()
             if Preview.kind then Preview.views[Preview.kind]={yaw=.3,pitch=.02,zoom=1} end
         end)
-        Preview.shuffle=button(panel,"Another NPC",UDim2.new(.5,6,1,-29),UDim2.new(.5,-18,0,22),function()
+        Preview.shuffle=ui:AddButton("Another NPC",'right',function()
             if Preview.kind then Preview.Refresh(Preview.kind,true) end
         end)
-        connect(viewport.InputBegan,function(input)
-            if input.UserInputType==Enum.UserInputType.MouseButton1 and Preview.panel.Visible then
-                Preview.dragging=true;Preview.lastMouse=Input:GetMouseLocation()
-            end
-        end)
-        connect(viewport.InputChanged,function(input)
-            if input.UserInputType==Enum.UserInputType.MouseWheel and Preview.kind then
+        ui.OnZoom=function(deltaZ)
+            if Preview.kind then
                 local view=Preview.views[Preview.kind]
-                view.zoom=math.clamp(view.zoom-input.Position.Z*.1,.65,1.8)
+                view.zoom=math.clamp(view.zoom-deltaZ*.1,.65,1.8)
             end
-        end)
-        connect(Input.InputEnded,function(input)
-            if input.UserInputType==Enum.UserInputType.MouseButton1 then Preview.dragging=false end
-        end)
-        connect(Input.WindowFocusReleased,function() Preview.dragging=false end)
+        end
+        Preview.ui=ui
     end
     function Preview.Refresh(kind,force)
         local source=Preview.Resolve(kind,force)
@@ -2859,55 +2808,54 @@ local installPreview=function(Context)
         Preview.sources[kind]=source
         if force or not Preview.object or not source or not old or old.model~=source.model or old.revision~=source.revision then
             local ok=Preview.BuildModel(kind,source)
-            Preview.empty.Visible=not ok
-            Preview.empty.Text=source and "Model could not be copied. Retrying…" or
-                (kind=="players" and "Waiting for your character…" or "No "..labels[kind].." model available. Retrying…")
+            Preview.ui.Empty.Visible=not ok
+            Preview.ui.Empty.Text=source and "Model could not be copied. Retryingâ¦" or
+                (kind=="players" and "Waiting for your characterâ¦" or "No "..labels[kind].." model available. Retryingâ¦")
         end
-        Preview.subtitle.Text=source and (labels[kind].." · "..source.label) or labels[kind]
+        Preview.ui.Subtitle.Text=source and (labels[kind].." Â· "..source.label) or labels[kind]
         Preview.shuffle.Visible=kind~="players"
         Preview.shuffle.Text=kind=="npc" and "Another NPC" or
             (source and source.actor and "Another zombie" or "Refresh model")
         Preview.nextSourceCheck=os.clock()+2
     end
     function Preview.Layout()
-        -- No-op: the panel is a plain child of Window.Holder, anchored with
-        -- UDim2 Scale/Offset in Preview.EnsureGui. Roblox repositions,
-        -- rescales and clips it together with the rest of the window on its
-        -- own — nothing to recompute per frame anymore. Kept as a function
-        -- (rather than removed) since Preview.Step below still calls it.
+        -- No-op: the adapter's AddPreview element docks and sizes itself
+        -- inside the window on its own. Kept as a function since Preview.Step
+        -- still calls it.
     end
     function Preview.Step(now)
         local kind=visiblePage()
         if not kind then
-            if Preview.panel then Preview.panel.Visible=false end
-            Preview.dragging=false
+            if Preview.ui then Preview.ui:SetVisible(false) end
+            if Preview.ui then Preview.ui.Dragging=false end
             return
         end
         Preview.EnsureGui()
+        if not Preview.ui then return end
         local switched=Preview.kind~=kind
         if not switched and now<Preview.nextFrame then return end
         Preview.nextFrame=now+1/30
-        Preview.panel.Visible=true;Preview.Layout()
+        Preview.ui:SetVisible(true);Preview.Layout()
         if switched then
-            Preview.kind=kind;Preview.dragging=false
+            Preview.kind=kind;Preview.ui.Dragging=false
             Preview.views[kind]=Preview.views[kind] or {yaw=.3,pitch=.02,zoom=1}
             Preview.ClearModel();Preview.Refresh(kind,false)
         elseif now>=Preview.nextSourceCheck then Preview.Refresh(kind,false) end
         if not Preview.object then return end
         local viewState=Preview.views[kind]
-        if Preview.dragging then
-            local mouse=Input:GetMouseLocation();local delta=mouse-Preview.lastMouse;Preview.lastMouse=mouse
+        if Preview.ui.Dragging then
+            local mouse=Preview.ui:GetMouseLocation();local delta=mouse-Preview.ui.LastMouse;Preview.ui.LastMouse=mouse
             viewState.yaw-=delta.X*.009;viewState.pitch=math.clamp(viewState.pitch+delta.Y*.006,-.65,.65)
         end
-        local view=Preview.viewport.AbsoluteSize
+        local view=Preview.ui.Viewport.AbsoluteSize
         if view.X<1 or view.Y<1 then return end
-        local tangent=math.tan(math.rad(Preview.camera.FieldOfView*.5))
+        local tangent=math.tan(math.rad(Preview.ui.Camera.FieldOfView*.5))
         local limitingHalfFov=math.atan(tangent*math.min(1,view.X/view.Y))
         local distance=Preview.radius/math.sin(limitingHalfFov)*1.12*viewState.zoom
         local yaw,pitch=viewState.yaw,viewState.pitch
         local offset=Vector3.new(math.sin(yaw)*math.cos(pitch),math.sin(pitch),-math.cos(yaw)*math.cos(pitch))*distance
-        Preview.camera.CFrame=CFrame.lookAt(Preview.focus+offset,Preview.focus)
-        local camera:any={CFrame=Preview.camera.CFrame,ViewportSize=view}
+        Preview.ui.Camera.CFrame=CFrame.lookAt(Preview.focus+offset,Preview.focus)
+        local camera:any={CFrame=Preview.ui.Camera.CFrame,ViewportSize=view}
         function camera:WorldToViewportPoint(point)
             local relative=self.CFrame:PointToObjectSpace(point);local depth=-relative.Z
             local focal=view.Y/(2*tangent)
@@ -2925,7 +2873,7 @@ local installPreview=function(Context)
             part.Color=Sense.sharedSettings.teamBasedColor and Preview.actor.PreviewTeamColor or chams.visibleColor
             part.Transparency=settings.enabled and chams.enabled and 1-chams.visibleIntensity or 1
         end
-        Preview.status.Text=(Preview.source and Preview.source.detail or "")..(settings.enabled and "" or " · ESP off")
+        Preview.ui.Status.Text=(Preview.source and Preview.source.detail or "")..(settings.enabled and "" or " Â· ESP off")
     end
     function Preview.Destroy()
         if Preview.destroyed then return end
@@ -2933,7 +2881,7 @@ local installPreview=function(Context)
         for _,connection in ipairs(Preview.connections) do connection:Disconnect() end
         table.clear(Preview.connections)
         Preview.ClearModel()
-        if Preview.panel then Preview.panel:Destroy();Preview.panel=nil end
+        if Preview.ui then Preview.ui:Destroy();Preview.ui=nil end
         table.clear(Preview.sources);table.clear(Preview.views)
     end
     for kind,page in pairs(pages) do
@@ -2944,7 +2892,7 @@ local installPreview=function(Context)
         if Preview.destroyed then return end
         local ok,err=pcall(Preview.Step,os.clock())
         if not ok then
-            if Preview.panel then Preview.panel.Visible=false end
+            if Preview.ui then Preview.ui:SetVisible(false) end
             if Preview.LastError~=tostring(err) then Preview.LastError=tostring(err);warn("[Visuals 3D Preview]",err) end
         end
     end)
@@ -2958,8 +2906,6 @@ local preview=installPreview({Library=Library,Window=Window,Sense=Sense,Player=A
 Combat.Preview=preview
 local destroyWithPreview=Combat.Destroy
 Combat.Destroy=function() preview.Destroy();destroyWithPreview() end
-end
-
 end
 
 do

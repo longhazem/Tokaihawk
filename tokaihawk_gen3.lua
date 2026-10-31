@@ -695,6 +695,170 @@ function Library:CreateWindow(info)
                 return LabelShim
             end
 
+            -- Airflow's own native 3D preview element (README: Viewport) —
+            -- a real row in the groupbox, auto spun/drag-to-turn/clipped by
+            -- Airflow itself, so it can't ever float outside the window or
+            -- clash with the theme the way a hand-built ViewportFrame can.
+            -- BRM5.lua's live ESP-style overlay (box/name/skeleton drawn over
+            -- the model) has no equivalent here — Airflow's Viewport is just
+            -- the spinning model, nothing drawn on top of it.
+            function Funcs:AddViewport(vinfo)
+                vinfo = vinfo or {}
+                local control = airflowGroupbox:CreateViewport({
+                    Name = vinfo.Name, Desc = vinfo.Desc, Model = vinfo.Model,
+                    Height = vinfo.Height, Spin = vinfo.Spin, SpinSpeed = vinfo.SpinSpeed,
+                    Angle = vinfo.Angle, Pitch = vinfo.Pitch, Distance = vinfo.Distance,
+                    FieldOfView = vinfo.FieldOfView, Clone = vinfo.Clone,
+                    Caption = vinfo.Caption, Ambient = vinfo.Ambient, LightColor = vinfo.LightColor,
+                })
+                local ViewportShim = { _ctrl = control }
+                function ViewportShim:SetModel(value) return control:SetModel(value) end
+                function ViewportShim:Set(value) return control:Set(value) end
+                function ViewportShim:Refresh() return control:Refresh() end
+                function ViewportShim:SetSpin(enabled) return control:SetSpin(enabled) end
+                function ViewportShim:SetSpinSpeed(degrees) return control:SetSpinSpeed(degrees) end
+                function ViewportShim:SetAngle(degrees) return control:SetAngle(degrees) end
+                function ViewportShim:SetCaption(text) return control:SetCaption(text) end
+                function ViewportShim:SetTitle(text) return control:SetTitle(text) end
+                return ViewportShim
+            end
+
+            -- A native UI hawk element for a hand-built 3D preview WITH a live
+            -- ESP-style overlay drawn on top — the one thing Airflow's own
+            -- Viewport (above) can't do, since Airflow never exposes that
+            -- control's camera or lets anything be drawn over it. BRM5.lua
+            -- used to build this chrome itself (raw Library:Create calls
+            -- reaching straight into window internals); it's a real adapter
+            -- element now, same as AddToggle/AddSlider/AddViewport, so BRM5.lua
+            -- only supplies the ESP-specific parts (model building, per-frame
+            -- projection, what to draw) and never touches a raw Instance.
+            function Funcs:AddPreview(pinfo)
+                pinfo = pinfo or {}
+                local width, height = pinfo.Width or 264, pinfo.Height or 390
+                local panel = Library:Create('Frame', {
+                    Name = pinfo.Name or 'Preview', BorderSizePixel = 0,
+                    BackgroundColor3 = Library.BackgroundColor,
+                    AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 16, 1, -16),
+                    Size = UDim2.fromOffset(width, height),
+                    Visible = false, ClipsDescendants = true, ZIndex = 510, Parent = holder,
+                })
+                Library:AddToRegistry(panel, { BackgroundColor3 = 'BackgroundColor' })
+                Library:Create('UICorner', { CornerRadius = UDim.new(0, 10), Parent = panel })
+                local border = Library:Create('UIStroke', { Color = Library.OutlineColor, Thickness = 1, Parent = panel })
+                Library:AddToRegistry(border, { Color = 'OutlineColor' })
+                local accent = Library:Create('Frame', {
+                    BorderSizePixel = 0, BackgroundColor3 = Library.AccentColor,
+                    Size = UDim2.new(1, 0, 0, 2), ZIndex = 511, Parent = panel,
+                })
+                Library:AddToRegistry(accent, { BackgroundColor3 = 'AccentColor' })
+
+                local function makeLabel(position, size, textSize)
+                    local object = Library:Create('TextLabel', {
+                        BackgroundTransparency = 1, Text = '', Font = Library.Font,
+                        TextSize = textSize, TextColor3 = Library.FontColor,
+                        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+                        Position = position, Size = size, ZIndex = 512, Parent = panel,
+                    })
+                    Library:AddToRegistry(object, { TextColor3 = 'FontColor' })
+                    return object
+                end
+                local title = makeLabel(UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 20), 14)
+                title.Text = pinfo.Title or ''
+                local subtitle = makeLabel(UDim2.fromOffset(12, 31), UDim2.new(1, -24, 0, 17), 12)
+                subtitle.TextTransparency = .25
+
+                -- A soft vignette card behind the model instead of a flat
+                -- backdrop: a near-transparent tinted frame with a vertical
+                -- gradient fade.
+                local stage = Library:Create('Frame', {
+                    Name = 'Stage', BorderSizePixel = 0, BackgroundColor3 = Library.BackgroundColor,
+                    BackgroundTransparency = .4, ClipsDescendants = true,
+                    Position = UDim2.fromOffset(8, 55), Size = UDim2.new(1, -16, 1, -127),
+                    ZIndex = 511, Parent = panel,
+                })
+                Library:AddToRegistry(stage, { BackgroundColor3 = 'BackgroundColor' })
+                Library:Create('UICorner', { CornerRadius = UDim.new(0, 8), Parent = stage })
+                Library:Create('UIGradient', {
+                    Rotation = 90,
+                    Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, .1), NumberSequenceKeypoint.new(.5, .75),
+                        NumberSequenceKeypoint.new(1, .2),
+                    }),
+                    Parent = stage,
+                })
+                local viewport = Instance.new('ViewportFrame')
+                viewport.Name = 'Model'; viewport.BackgroundTransparency = 1; viewport.BorderSizePixel = 0
+                viewport.Position = UDim2.fromScale(0, 0); viewport.Size = UDim2.fromScale(1, 1)
+                viewport.Ambient = pinfo.Ambient or Color3.fromRGB(165, 169, 180)
+                viewport.LightColor = pinfo.LightColor or Color3.fromRGB(245, 237, 221)
+                viewport.LightDirection = pinfo.LightDirection or Vector3.new(-1, -.7, -1)
+                viewport.ZIndex = 511; viewport.Active = true; viewport.Parent = stage
+                local world = Instance.new('WorldModel'); world.Parent = viewport
+                local camera = Instance.new('Camera'); camera.FieldOfView = pinfo.FieldOfView or 30
+                camera.Parent = viewport; viewport.CurrentCamera = camera
+                local overlay = Instance.new('Frame'); overlay.Name = 'Overlay'; overlay.BackgroundTransparency = 1
+                overlay.Size = UDim2.fromScale(1, 1); overlay.ClipsDescendants = true
+                overlay.ZIndex = 512; overlay.Parent = viewport
+
+                local empty = makeLabel(UDim2.new(0, 18, .5, -24), UDim2.new(1, -36, 0, 48), 13)
+                empty.TextWrapped = true; empty.TextXAlignment = Enum.TextXAlignment.Center
+                local status = makeLabel(UDim2.new(0, 12, 1, -68), UDim2.new(1, -24, 0, 17), 11)
+                local hint = makeLabel(UDim2.new(0, 12, 1, -49), UDim2.new(1, -24, 0, 15), 11)
+                hint.Text = pinfo.Hint or 'Drag to rotate · Scroll to zoom'; hint.TextTransparency = .35
+
+                local PreviewShim = {
+                    Panel = panel, Viewport = viewport, World = world, Camera = camera, Overlay = overlay,
+                    Title = title, Subtitle = subtitle, Empty = empty, Status = status, Hint = hint,
+                    Dragging = false,
+                }
+
+                local function button(text, position, size, callback)
+                    local object = Library:Create('TextButton', {
+                        Text = text, Font = Library.Font, TextSize = 12,
+                        TextColor3 = Library.FontColor, BackgroundColor3 = Library.MainColor, BorderSizePixel = 0,
+                        Position = position, Size = size, ZIndex = 515, Parent = panel,
+                    })
+                    Library:AddToRegistry(object, { TextColor3 = 'FontColor', BackgroundColor3 = 'MainColor' })
+                    Library:Create('UICorner', { CornerRadius = UDim.new(0, 3), Parent = object })
+                    object.MouseButton1Click:Connect(function() Library:SafeCallback(callback) end)
+                    return object
+                end
+                -- side: 'left' or 'right' half of the bottom button row (mirrors
+                -- the old Reset view / Another NPC button pair).
+                function PreviewShim:AddButton(text, side, callback)
+                    local position = side == 'right' and UDim2.new(.5, 6, 1, -29) or UDim2.new(0, 12, 1, -29)
+                    return button(text, position, UDim2.new(.5, -18, 0, 22), callback)
+                end
+
+                local connections = {}
+                local function connect(signal, fn) connections[#connections + 1] = signal:Connect(fn) end
+                connect(viewport.InputBegan, function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 and panel.Visible then
+                        PreviewShim.Dragging = true
+                        PreviewShim.LastMouse = UserInputService:GetMouseLocation()
+                        Library:SafeCallback(PreviewShim.OnDragStart)
+                    end
+                end)
+                connect(viewport.InputChanged, function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseWheel then
+                        Library:SafeCallback(PreviewShim.OnZoom, input.Position.Z)
+                    end
+                end)
+                connect(UserInputService.InputEnded, function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then PreviewShim.Dragging = false end
+                end)
+                connect(UserInputService.WindowFocusReleased, function() PreviewShim.Dragging = false end)
+
+                function PreviewShim:GetMouseLocation() return UserInputService:GetMouseLocation() end
+                function PreviewShim:SetVisible(value) panel.Visible = value and true or false end
+                function PreviewShim:Destroy()
+                    for _, connection in ipairs(connections) do connection:Disconnect() end
+                    table.clear(connections)
+                    panel:Destroy()
+                end
+                return PreviewShim
+            end
+
             function Funcs:AddInput(idx, iinfo)
                 iinfo = iinfo or {}
                 local flag = uniqueFlag(idx)
