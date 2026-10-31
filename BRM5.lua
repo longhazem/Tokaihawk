@@ -2789,18 +2789,25 @@ local installPreview=function(Context)
     end
     function Preview.EnsureGui()
         if Preview.panel then return end
-        -- Parented to the window's own ScreenGui (same root Window.Holder lives
-        -- under), not Window.Holder itself: Airflow's Holder clips descendants
-        -- and can carry a UIScale for responsive sizing, so a child positioned
-        -- outside its rect (this panel sits beside the window) got clipped or
-        -- mis-scaled relative to the real on-screen window. A screen-space
-        -- sibling of Holder tracks the window correctly regardless of Holder's
-        -- own clipping/scale.
-        local previewRoot=Window.Holder:FindFirstAncestorWhichIsA('ScreenGui') or Window.Holder.Parent
+        -- A fixed box living directly INSIDE the window (parented to
+        -- Window.Holder itself, anchored bottom-left with plain UDim2 Scale/
+        -- Offset) instead of a panel trying to float beside the window on
+        -- screen. Being a real child of Holder means Roblox moves, scales and
+        -- clips it together with the rest of the window automatically — no
+        -- screen-space math, no side-picking, no corner-overlap case to get
+        -- wrong. The tab rail sits along the window's right edge, so the
+        -- bottom-left corner is clear of it.
         local panel=Library:Create("Frame",{Name="Visuals3DPreview",BorderSizePixel=0,
-            BackgroundColor3=Library.BackgroundColor,Size=UDim2.fromOffset(264,430),Visible=false,
-            ClipsDescendants=true,ZIndex=510,Parent=previewRoot})
+            BackgroundColor3=Library.BackgroundColor,
+            AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,16,1,-16),Size=UDim2.fromOffset(236,300),
+            Visible=false,ClipsDescendants=true,ZIndex=510,Parent=Window.Holder})
         Library:AddToRegistry(panel,{BackgroundColor3="BackgroundColor"})
+        -- Airflow rounds every card/window corner (default 10px, scales with
+        -- Airflow:SetCornerRadius); a hard-cornered panel sitting right next to
+        -- the window's rounded edges is its own "doesn't match the UI" tell.
+        -- ClipsDescendants on the panel masks every child (accent bar, viewport)
+        -- to this same rounded shape, so nothing extra is needed on them.
+        Library:Create("UICorner",{CornerRadius=UDim.new(0,10),Parent=panel})
         local border=Library:Create("UIStroke",{Color=Library.OutlineColor,Thickness=1,Parent=panel})
         Library:AddToRegistry(border,{Color="OutlineColor"})
         local accent=Library:Create("Frame",{BorderSizePixel=0,BackgroundColor3=Library.AccentColor,
@@ -2863,23 +2870,11 @@ local installPreview=function(Context)
         Preview.nextSourceCheck=os.clock()+2
     end
     function Preview.Layout()
-        local camera=workspace.CurrentCamera
-        if not camera then return end
-        local screen=camera.ViewportSize
-        local pos,size=Window.Holder.AbsolutePosition,Window.Holder.AbsoluteSize
-        local width=math.min(264,math.max(120,screen.X-16))
-        local height=math.min(430,math.max(220,screen.Y-16),math.max(220,size.Y))
-        local x=pos.X+size.X+12
-        if x+width>screen.X-8 then x=pos.X-width-12 end
-        x=math.clamp(x,8,math.max(8,screen.X-width-8))
-        local y=math.clamp(pos.Y,8,math.max(8,screen.Y-height-8))
-        Preview.panel.Size=UDim2.fromOffset(width,height)
-        -- x/y are already screen-space (same frame Window.Holder.AbsolutePosition
-        -- lives in); the panel now sits directly under the window's ScreenGui
-        -- instead of inside Holder, so no Holder-relative offset is subtracted
-        -- here anymore — that subtraction was the actual bug: it undid this
-        -- screen-space math the moment Holder had any clipping/scale of its own.
-        Preview.panel.Position=UDim2.fromOffset(x,y)
+        -- No-op: the panel is a plain child of Window.Holder, anchored with
+        -- UDim2 Scale/Offset in Preview.EnsureGui. Roblox repositions,
+        -- rescales and clips it together with the rest of the window on its
+        -- own — nothing to recompute per frame anymore. Kept as a function
+        -- (rather than removed) since Preview.Step below still calls it.
     end
     function Preview.Step(now)
         local kind=visiblePage()
