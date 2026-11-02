@@ -2884,10 +2884,12 @@ local installPreview=function(Context)
         if Preview.ui then Preview.ui:Destroy();Preview.ui=nil end
         table.clear(Preview.sources);table.clear(Preview.views)
     end
-    for kind,page in pairs(pages) do
-        local toggle=page.Groups[1]:AddToggle(kind.."_visuals_3d_preview",{Text="Visuals 3D Preview",Default=true})
-        toggle:OnChanged(function(value) Preview.enabled[kind]=value end)
-    end
+    pcall(function()
+        for kind,page in pairs(pages) do
+            local toggle=page.Groups[1]:AddToggle(kind.."_visuals_3d_preview",{Text="Visuals 3D Preview",Default=true})
+            toggle:OnChanged(function(value) Preview.enabled[kind]=value end)
+        end
+    end)
     connect(RunService.RenderStepped,function()
         if Preview.destroyed then return end
         local ok,err=pcall(Preview.Step,os.clock())

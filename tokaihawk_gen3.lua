@@ -181,6 +181,14 @@ function Library:AttemptSave()
     end
 end
 
+-- Menu toggle: BRM5.lua captures Library.Toggle at startup to wrap it with an
+-- IsTyping() guard. Without this the capture gets nil and calling it crashes.
+function Library:Toggle()
+    if self._window and self._window._airflowWindow then
+        pcall(function() self._window._airflowWindow:Toggle() end)
+    end
+end
+
 -- Flag-dedup counter: BRM5 sometimes reuses human labels as flags across
 -- different groupboxes; Airflow requires globally-unique Flag strings.
 local flagSeen = {}
@@ -479,6 +487,12 @@ function Library:CreateWindow(info)
                 KeyShim.Clicked = fn
             end
 
+            -- BRM5.lua wraps picker.Update for every KeyPicker in Options so it
+            -- can trigger a keybind-row resize after each Airflow internal update.
+            -- Airflow handles its own UI refresh internally; this is a no-op stub
+            -- so the wrap captures a real function instead of nil.
+            function KeyShim:Update() end
+
             -- Toggle-mode press detection — Airflow's own Keybind only fires its
             -- Callback on rebind, not on every press, so Toggle mode needs its own
             -- input listener, same as LinoriaLib's KeyPicker:DoClick.
@@ -664,6 +678,13 @@ function Library:CreateWindow(info)
                     control:Set(toSet)
                     self.Value = normalize(control.Value)
                 end
+                -- BRM5.lua calls :SetValues(list) on dropdowns to update the available
+                -- options at runtime (NV preset saves, VTP mode lists). Airflow exposes
+                -- this as control:SetOptions(list).
+                function DropShim:SetValues(newValues)
+                    pcall(function() control:SetOptions(newValues or {}) end)
+                    self.Value = normalize(control.Value)
+                end
                 if flag then Toggles[flag] = DropShim; Options[flag] = DropShim end
                 return DropShim
             end
@@ -847,7 +868,7 @@ function Library:CreateWindow(info)
                 connect(UserInputService.InputEnded, function(input)
                     if input.UserInputType == Enum.UserInputType.MouseButton1 then PreviewShim.Dragging = false end
                 end)
-                connect(UserInputService.WindowFocusReleased, function() PreviewShim.Dragging = false end)
+                pcall(function() connect(UserInputService.WindowFocusReleased, function() PreviewShim.Dragging = false end) end)
 
                 function PreviewShim:GetMouseLocation() return UserInputService:GetMouseLocation() end
                 function PreviewShim:SetVisible(value) panel.Visible = value and true or false end
